@@ -18,7 +18,7 @@ default_market_data = {
     "Alts & REITs": {"Global REITs": [7.5, 18.0], "Gold": [8.0, 14.0], "Crypto": [25.0, 68.0]}
 }
 
-# --- 3. SIDEBAR (MOBILE OPTIMIZED) ---
+# --- 3. SIDEBAR (AUTO-SELECT ALL ENABLED) ---
 st.sidebar.header("📂 JustETF Market Hub")
 
 def global_toggle():
@@ -27,7 +27,8 @@ def global_toggle():
         st.session_state[f"m_{cat}"] = val
         for asset in assets: st.session_state[f"chk_{asset}"] = val
 
-st.sidebar.checkbox("🌐 SELECT ALL ASSETS", key="global_master", on_change=global_toggle)
+# Default the Master Toggle to True
+st.sidebar.checkbox("🌐 SELECT ALL ASSETS", key="global_master", on_change=global_toggle, value=True)
 st.sidebar.divider()
 
 risk_profile = st.sidebar.select_slider("Risk Profile", ["Conservative", "Balanced", "Aggressive"], "Balanced")
@@ -40,12 +41,14 @@ for cat, assets in default_market_data.items():
         for a in default_market_data[c]: st.session_state[f"chk_{a}"] = st.session_state[f"m_{c}"]
 
     with st.sidebar.expander(cat, expanded=(cat == "Global Core")):
-        st.checkbox(f"Toggle {cat}", key=f"m_{cat}", on_change=cat_toggle)
+        # Default category toggles to True
+        st.checkbox(f"Toggle {cat}", key=f"m_{cat}", on_change=cat_toggle, value=True)
         st.caption("Asset | Ret% | Risk%")
         for asset, params in assets.items():
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1: 
-                active = st.checkbox(asset, key=f"chk_{asset}", value=(asset == "All-World"))
+                # OPTIMIZATION: value=True ensures all assets are checked on first run
+                active = st.checkbox(asset, key=f"chk_{asset}", value=True)
             with c2: u_ret = st.number_input("R", 0.0, 100.0, float(params[0]), key=f"ret_{asset}", label_visibility="collapsed")
             with c3: u_vol = st.number_input("V", 0.1, 100.0, float(params[1]), key=f"vol_{asset}", label_visibility="collapsed")
             if active:
@@ -103,7 +106,7 @@ if st.session_state.results:
         tg = tw - tp
         m1, m2 = st.columns(2)
         m1.metric("Final Wealth", f"€{tw:,.0f}")
-        m2.metric("Total Gain", f"€{tg:,.0f}", f"+{(tg/tp)*100:.1f}%")
+        m2.metric("Total Gain", f"€{tg:,.0f}", f"+{(tg/tp)*100:.0f}%")
         
         m3, m4 = st.columns(2)
         m3.metric("Invested", f"€{tp:,.0f}")
@@ -145,10 +148,9 @@ if st.session_state.results:
             rdf["Action"] = (rdf["Target %"] * total_act) - rdf["Actual"]
             st.table(rdf.style.format({"Actual":"€{:,.0f}", "Target %":"{:.1%}", "Action":"€{:,.0f}"}))
 
-    # --- 7. STRATEGIC NARRATIVE (FIXED COMPATIBILITY) ---
+    # --- 7. STRATEGIC NARRATIVE ---
     st.divider()
     st.header("💎 Strategic Narrative")
-    
     real_ret = res["ret"] - inflation
     payout = (tw * real_ret) / 12
     z = norm.ppf(1 - (1 - conf_level))
