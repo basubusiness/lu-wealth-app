@@ -10,7 +10,7 @@ st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 if 'results' not in st.session_state:
     st.session_state.results = None
 
-# --- 2. EXTENDED DATASET (Sectors Added) ---
+# --- 2. EXTENDED DATASET ---
 default_market_data = {
     "Global Core": {"World Equity": [8.5, 15.0], "All-World": [8.2, 16.5], "World Small Cap": [9.0, 19.0]},
     "Regional Equity": {"US (S&P 500)": [10.5, 17.0], "Europe 600": [7.2, 16.0], "Emerging Mkts": [8.0, 21.0]},
@@ -19,24 +19,23 @@ default_market_data = {
     "Alts & REITs": {"Global REITs": [7.5, 18.0], "Gold": [8.0, 14.0], "Crypto": [25.0, 68.0]}
 }
 
-# Flatten for Matrix
 all_names = [a for cat in default_market_data.values() for a in cat.keys()]
 
-# --- 3. SESSION STATE FOR CORRELATION (The "Engine Room" Persistence) ---
+# --- 3. SESSION STATE FOR CORRELATION ---
 if 'corr_matrix' not in st.session_state:
     df = pd.DataFrame(0.3, index=all_names, columns=all_names)
     for a in all_names: df.loc[a, a] = 1.0
-    # Set Baseline Logic
+    # Equity Correlations
     eq = ["World Equity", "All-World", "World Small Cap", "US (S&P 500)", "Europe 600", "Emerging Mkts", "AI & Tech", "Healthcare"]
     for a in eq:
         for b in eq: 
             if a != b: df.loc[a, b] = 0.85
-    df.loc["AI & Tech", "US (S&P 500)"] = 0.95 # High Tech Correlation
+    df.loc["AI & Tech", "US (S&P 500)"] = 0.95
     df.loc["Gold", eq] = 0.1
     df.loc["Euro Gov Bonds", eq] = -0.1
     st.session_state.corr_matrix = df
 
-# --- 4. SIDEBAR (As Before) ---
+# --- 4. SIDEBAR ---
 st.sidebar.header("📂 JustETF Market Hub")
 def global_toggle():
     val = st.session_state.global_master
@@ -65,7 +64,7 @@ st.title(f"🇱🇺 {risk_profile} Architect")
 mode = st.radio("Choose Strategy Engine:", ["Original (Static Monthly)", "V2 (Annual Step-Up)"], horizontal=True)
 st.divider()
 
-# --- 6. MAIN INPUTS ---
+# --- 6. MAIN INPUTS (FIXED SCOPE) ---
 c1, c2 = st.columns(2)
 with c1:
     target_ret = st.number_input("Target Return %", 1.0, 25.0, 8.5) / 100
@@ -77,11 +76,12 @@ with c2:
     inflation = st.number_input("Inflation %", value=1.8) / 100
     adj_inflation = st.checkbox("Show Chart in Today's Euros", value=False)
 
+conf_level = st.select_slider("Stress Confidence", [0.90, 0.95, 0.99], 0.95)
+
 # --- 7. ENGINE ---
 def run_analysis():
     n = len(f_rets)
     if n == 0 or target_ret > max(f_rets): return
-    # Use the Matrix from session state
     active_corr = st.session_state.corr_matrix.loc[f_names, f_names].values
     vol_diag = np.diag(f_vols)
     cov = vol_diag @ active_corr @ vol_diag
@@ -100,11 +100,16 @@ def run_analysis():
         if adj_inflation:
             wth = [w/((1+inflation)**i) for i, w in enumerate(wth)]
             inv = [v/((1+inflation)**i) for i, v in enumerate(inv)]
-        st.session_state.results = {"w": res.x, "ret": r_an, "vol": v_an, "wth": wth, "inv": inv, "y": y, "names": f_names, "risk_c": risk_cont}
+        
+        # Fixed Tipping Point for Step-Up context
+        g_series = [0] + [wth[i]-wth[i-1]-((monthly_add*12)*((1+step_up)**(max(0,i-1)))/((1+inflation)**i if adj_inflation else 1)) for i in range(1, len(y))]
+        tip = next((t for t, g in enumerate(g_series) if g > ((monthly_add*12)*((1+step_up)**(max(0,t-1)))/((1+inflation)**t if adj_inflation else 1))), None)
+
+        st.session_state.results = {"w": res.x, "ret": r_an, "vol": v_an, "wth": wth, "inv": inv, "y": y, "names": f_names, "risk_c": risk_cont, "tip": tip}
 
 if st.button("🚀 Calculate Strategy"): run_analysis()
 
-# --- 8. OUTPUT TABS ---
+# --- 8. OUTPUT ---
 if st.session_state.results:
     res = st.session_state.results
     t1, t2, t3, t4, t5, t6 = st.tabs(["📊 Portfolio", "📈 Wealth Path", "🔔 Risk", "⚖️ Rebalance", "🧪 Advanced Risk", "⚙️ Engine Room"])
@@ -116,28 +121,43 @@ if st.session_state.results:
         df = pd.DataFrame({"Asset": res["names"], "Target %": res["w"], "Lump Sum": res["w"]*current_val, "Year 1 Monthly": res["w"]*monthly_add, f"Year {horizon} Monthly": res["w"]*final_monthly})
         st.table(df[df["Target %"] > 0.005].style.format({"Target %":"{:.1%}", "Lump Sum":"€{:,.0f}", "Year 1 Monthly":"€{:,.0f}", f"Year {horizon} Monthly":"€{:,.0f}"}))
 
+    with t2:
+        fig_p = go.Figure()
+        fig_p.add_trace(go.Scatter(x=res["y"], y=res["wth"], name="Portfolio", fill='tozeroy'))
+        fig_p.add_trace(go.Scatter(x=res["y"], y=res["inv"], name="Invested", line=dict(color='black', dash='dash')))
+        if res["tip"]: fig_p.add_vline(x=res["tip"], line_dash="dot", line_color="#2ecc71", annotation_text="Tipping Point")
+        st.plotly_chart(fig_p, use_container_width=True)
+
     with t5:
-        st.subheader("Risk Contribution Waterfall")
+        st.subheader("Where is your Volatility coming from?")
         risk_df = pd.DataFrame({"Asset": res["names"], "RC": res["risk_c"]})
         fig = go.Figure(go.Waterfall(orientation="v", x=risk_df["Asset"], y=risk_df["RC"]*100, measure=["relative"]*len(risk_df)))
         st.plotly_chart(fig, use_container_width=True)
 
     with t6:
         st.subheader("Interactive Correlation Matrix")
-        st.write("Adjust how assets move together. 1.0 = identical, 0.0 = independent, -1.0 = inverse.")
-        # Only show active assets for editing to keep it manageable
         sub_corr = st.data_editor(st.session_state.corr_matrix.loc[f_names, f_names])
         if st.button("💾 Save Correlation Changes"):
             st.session_state.corr_matrix.update(sub_corr)
             st.success("Correlations updated! Re-run 'Calculate Strategy' to see the impact.")
 
-    # Narrative Section (Restored)
+    # --- NARRATIVE (FIXED) ---
     st.divider()
+    st.header("💎 Strategic Narrative")
     real_ret = res["ret"] - inflation
     payout = (tw * real_ret) / 12
+    # Fix NameError by ensuring conf_level is accessible
     worst = tw * np.exp(-norm.ppf(conf_level) * res["vol"] * np.sqrt(horizon))
+    
     c_n1, c_n2 = st.columns(2)
     with c_n1:
-        st.metric("Monthly Payout (Real)", f"€{max(0, payout):,.0f}", help="Safe withdrawal in today's euros.")
+        st.subheader("🏦 Passive Income")
+        st.metric("Monthly Payout (Real)", f"€{max(0, payout):,.0f}", help="The Safe Withdrawal amount in today's purchasing power.")
+        if res["tip"]: 
+            st.write(f"✅ **Tipping Point: Year {res['tip']}**")
+            st.caption("The year your portfolio growth exceeds your annual savings.")
     with c_n2:
+        st.subheader("🛡️ Safety & Tax")
         st.metric("Stress Floor", f"€{worst:,.0f}", help="Conservative wealth estimate during a crisis.")
+        st.write(f"💰 **LU Tax Advantage: €{(res['wth'][-1]-res['inv'][-1]) * 0.40:,.0f}**")
+        st.caption("Estimated savings from the 0% long-term capital gains tax in Luxembourg.")
