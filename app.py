@@ -64,7 +64,7 @@ with c2:
 conf_level = st.select_slider("Stress Confidence", [0.90, 0.95, 0.99], 0.95)
 inflation = st.number_input("Inflation %", value=1.8) / 100
 
-# --- 5. THE ENGINE ---
+# --- 5. ENGINE ---
 def run_analysis():
     n = len(f_rets)
     if n == 0: return 
@@ -109,7 +109,6 @@ if st.session_state.results:
         m3.metric("Invested", f"€{tp:,.0f}")
         m4.metric("Monthly Buy", f"€{monthly_add:,.0f}")
         
-        # Portfolio Composition
         fig_b = go.Figure(go.Bar(y=['Total'], x=[tp], name='Invested', orientation='h', marker_color='gray'))
         fig_b.add_trace(go.Bar(y=['Total'], x=[tg], name='Gains', orientation='h', marker_color='#2ecc71'))
         fig_b.update_layout(barmode='stack', height=120, margin=dict(l=0,r=0,t=0,b=0), showlegend=False)
@@ -127,7 +126,6 @@ if st.session_state.results:
         st.plotly_chart(fig_p, use_container_width=True)
 
     with t3:
-        st.write("**Return Probability Distribution**")
         mu, sigma = res["ret"], res["vol"]
         x = np.linspace(mu-4*sigma, mu+4*sigma, 100)
         fig_bell = go.Figure(go.Scatter(x=x, y=norm.pdf(x, mu, sigma), fill='tozeroy', line_color='#2ecc71'))
@@ -146,7 +144,7 @@ if st.session_state.results:
             rdf["Action"] = (rdf["Target %"] * total_act) - rdf["Actual"]
             st.table(rdf.style.format({"Actual":"€{:,.0f}", "Target %":"{:.1%}", "Action":"€{:,.0f}"}))
 
-    # --- 7. STRATEGIC NARRATIVE ---
+    # --- 7. STRATEGIC NARRATIVE (WITH TOOLTIPS) ---
     st.divider()
     st.header("💎 Strategic Narrative")
     real_ret = res["ret"] - inflation
@@ -157,9 +155,14 @@ if st.session_state.results:
     c_n1, c_n2 = st.columns(2)
     with c_n1:
         st.subheader("🏦 Passive Income")
-        st.info(f"Monthly Payout: **€{max(0, payout):,.0f}** (Inflation-adjusted salary).")
-        if res["tip"]: st.success(f"**Tipping Point (Year {res['tip']}):** Wealth out-earns savings.")
+        st.info(f"Monthly Payout: **€{max(0, payout):,.0f}**", 
+                help="Based on the 'Safe Withdrawal' logic where you only spend the REAL return (Net of Inflation) to preserve your capital forever.")
+        if res["tip"]: 
+            st.success(f"**Tipping Point (Year {res['tip']})**", 
+                       help="The year your portfolio's annual growth exceeds your annual contributions. Your money is now working harder than you are.")
     with c_n2:
         st.subheader("🛡️ Safety & Tax")
-        st.warning(f"**Stress Floor:** €{worst:,.0f} ({conf_level*100:.0f}% confidence).")
-        st.success(f"**LU Tax Advantage:** Shielding €{tg * 0.40:,.0f} in potential gains.")
+        st.warning(f"**Stress Floor:** €{worst:,.0f}", 
+                   help=f"Statistically, there is only a {(1-conf_level)*100:.0f}% chance your portfolio drops below this value over the full horizon, based on your selected risk profile.")
+        st.success(f"**LU Tax Advantage:** €{tg * 0.40:,.0f}", 
+                   help="In Luxembourg, capital gains on UCITS ETFs are typically tax-exempt if held for >6 months. This figure estimates what you'd save vs. a 40% tax regime elsewhere.")
