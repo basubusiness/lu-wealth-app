@@ -10,13 +10,33 @@ st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 if 'results' not in st.session_state:
     st.session_state.results = None
 
-# --- 2. DATASET ---
+# --- 2. DATASET & CORRELATION MATRIX ---
+asset_list = [
+    "World Equity", "All-World", "World Small Cap", 
+    "US (S&P 500)", "Europe 600", "Emerging Mkts", 
+    "Euro Gov Bonds", "Corp Bonds", "Cash/MM", 
+    "Global REITs", "Gold", "Crypto"
+]
+
 default_market_data = {
     "Global Core": {"World Equity": [8.5, 15.0], "All-World": [8.2, 16.5], "World Small Cap": [9.0, 19.0]},
     "Regional Equity": {"US (S&P 500)": [10.5, 17.0], "Europe 600": [7.2, 16.0], "Emerging Mkts": [8.0, 21.0]},
     "Bonds & Cash": {"Euro Gov Bonds": [3.2, 5.0], "Corp Bonds": [4.5, 7.5], "Cash/MM": [3.3, 0.8]},
     "Alts & REITs": {"Global REITs": [7.5, 18.0], "Gold": [8.0, 14.0], "Crypto": [25.0, 68.0]}
 }
+
+# 2026 Institutional Correlation Baseline
+corr_df = pd.DataFrame(0.3, index=asset_list, columns=asset_list)
+for a in asset_list: corr_df.loc[a, a] = 1.0
+equity_group = ["World Equity", "All-World", "World Small Cap", "US (S&P 500)", "Europe 600", "Emerging Mkts"]
+for a in equity_group:
+    for b in equity_group:
+        if a != b: corr_df.loc[a, b] = 0.85
+corr_df.loc["Gold", equity_group] = 0.1
+corr_df.loc["Euro Gov Bonds", equity_group] = -0.1
+corr_df.loc["Crypto", equity_group] = 0.4
+corr_df.loc["Cash/MM", asset_list] = 0.05
+corr_df.loc["Cash/MM", "Cash/MM"] = 1.0
 
 # --- 3. SIDEBAR ---
 st.sidebar.header("📂 JustETF Market Hub")
@@ -28,7 +48,6 @@ def global_toggle():
 
 st.sidebar.checkbox("🌐 SELECT ALL ASSETS", key="global_master", on_change=global_toggle, value=True)
 st.sidebar.divider()
-
 risk_profile = st.sidebar.select_slider("Risk Profile", ["Conservative", "Balanced", "Aggressive"], "Balanced")
 risk_caps = {"Conservative": 0.25, "Balanced": 0.50, "Aggressive": 0.90}
 
@@ -54,37 +73,40 @@ st.divider()
 # --- 5. MAIN INPUTS ---
 c1, c2 = st.columns(2)
 with c1:
-    target_ret = st.number_input("Target Return %", 1.0, 25.0, 8.5, help="Target Annualized Return. The optimizer will find the lowest risk portfolio to hit this.") / 100
+    target_ret = st.number_input("Target Return %", 1.0, 25.0, 8.5) / 100
     current_val = st.number_input("Initial Capital (€)", value=100000)
     step_up = st.slider("Annual Contribution Increase %", 0, 15, 3) / 100 if mode == "V2 (Annual Step-Up)" else 0.0
 with c2:
     monthly_add = st.number_input("Monthly Savings (€)", value=3000)
     horizon = st.slider("Horizon (Years)", 1, 40, 20)
     inflation = st.number_input("Inflation %", value=1.8) / 100
-
 conf_level = st.select_slider("Stress Confidence", [0.90, 0.95, 0.99], 0.95)
 
-# --- 6. ENGINE ---
+# --- 6. ENGINE (RESTORING COVARIANCE) ---
 def run_analysis():
     n = len(f_rets)
     if n == 0 or target_ret > max(f_rets): return
-    cov = np.outer(f_vols, f_vols) * (np.eye(n)*0.7 + 0.3)
+    active_corr = corr_df.loc[f_names, f_names].values
+    vol_diag = np.diag(f_vols)
+    cov = vol_diag @ active_corr @ vol_diag
+    
     def obj(w): return np.sqrt(np.dot(w.T, np.dot(cov, w)))
     cons = [{'type': 'eq', 'fun': lambda w: np.sum(w)-1}, {'type': 'ineq', 'fun': lambda w: np.sum(w*f_rets)-target_ret}]
     res = minimize(obj, [1/n]*n, bounds=[(0, risk_caps[risk_profile])]*n, constraints=cons)
+    
     if res.success:
         r_an, v_an = np.sum(res.x*f_rets), np.sqrt(np.dot(res.x.T, np.dot(cov, res.x)))
+        # Calculate Risk Contribution %: (w * Cov * w.T) / Total_Var
+        risk_cont = (res.x * (cov @ res.x)) / (v_an**2)
         y = np.arange(0, horizon + 1)
         wth, inv = [current_val], [current_val]
-        total_inv = current_val
         for t in range(1, horizon + 1):
             yearly_contri = (monthly_add * 12) * ((1 + step_up)**(t-1))
             wth.append((wth[-1] * (1 + r_an)) + yearly_contri)
-            total_inv += yearly_contri
-            inv.append(total_inv)
+            inv.append(inv[-1] + yearly_contri)
         gns = [0] + [wth[i]-wth[i-1]-((monthly_add*12)*((1+step_up)**(max(0,i-1)))) for i in range(1, len(y))]
         tip = next((t for t, g in enumerate(gns) if g > (monthly_add*12)*((1+step_up)**(max(0,t-1)))), None)
-        st.session_state.results = {"w": res.x, "ret": r_an, "vol": v_an, "wth": wth, "inv": inv, "y": y, "tip": tip, "names": f_names}
+        st.session_state.results = {"w": res.x, "ret": r_an, "vol": v_an, "wth": wth, "inv": inv, "y": y, "tip": tip, "names": f_names, "risk_c": risk_cont}
 
 if st.button("🚀 Calculate Strategy"): run_analysis()
 
@@ -92,70 +114,49 @@ if st.button("🚀 Calculate Strategy"): run_analysis()
 if st.session_state.results:
     res = st.session_state.results
     st.divider()
-    t1, t2, t3, t4 = st.tabs(["📊 Portfolio", "📈 Wealth Path", "🔔 Risk", "⚖️ Rebalance"])
-
+    t1, t2, t3, t4, t5 = st.tabs(["📊 Portfolio", "📈 Wealth Path", "🔔 Risk", "⚖️ Rebalance", "🧪 Advanced Risk"])
+    
     with t1:
         tw, tp = res["wth"][-1], res["inv"][-1]
-        tg = tw - tp
-        c_m1, c_m2 = st.columns(2)
-        c_m1.metric("Final Wealth", f"€{tw:,.0f}", help="Total account value at the end of the horizon.")
-        c_m2.metric("Total Gain", f"€{tg:,.0f}", f"+{(tg/tp)*100:.1f}%", help="Profit from growth (excludes principal).")
-        
-        # --- RESTORED MONTHLY CONTRIBUTION COLUMN ---
-        mix_df = pd.DataFrame({
-            "Asset": res["names"], 
-            "Target %": res["w"], 
-            "Lump Sum": res["w"]*current_val,
-            "Monthly Buy": res["w"]*monthly_add # Monthly buy at start
-        })
-        st.table(mix_df[mix_df["Target %"] > 0.005].style.format({
-            "Target %":"{:.1%}", 
-            "Lump Sum":"€{:,.0f}",
-            "Monthly Buy":"€{:,.0f}"
-        }))
-        st.caption(f"💡 Monthly Buy is based on your Year 1 savings of €{monthly_add:,.0f}/mo.")
+        st.metric("Final Wealth", f"€{tw:,.0f}", f"+{(tw/tp-1)*100:.1f}% Gains")
+        mix_df = pd.DataFrame({"Asset": res["names"], "Target %": res["w"], "Lump Sum": res["w"]*current_val, "Monthly Buy": res["w"]*monthly_add})
+        st.table(mix_df[mix_df["Target %"] > 0.005].style.format({"Target %":"{:.1%}", "Lump Sum":"€{:,.0f}", "Monthly Buy":"€{:,.0f}"}))
 
     with t2:
         fig_p = go.Figure()
-        fig_p.add_trace(go.Scatter(x=res["y"], y=res["wth"], name="Wealth", fill='tozeroy', line_color='#1f77b4'))
+        fig_p.add_trace(go.Scatter(x=res["y"], y=res["wth"], name="Wealth", fill='tozeroy'))
         fig_p.add_trace(go.Scatter(x=res["y"], y=res["inv"], name="Principal", line=dict(color='black', dash='dash')))
-        if res["tip"]: fig_p.add_vline(x=res["tip"], line_dash="dot", line_color="#2ecc71", annotation_text="Tipping Point")
-        fig_p.update_layout(margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02))
         st.plotly_chart(fig_p, use_container_width=True)
 
-    with t3:
+    with t3: # Normal distribution plot
         mu, sigma = res["ret"], res["vol"]
         x = np.linspace(mu-4*sigma, mu+4*sigma, 100)
         st.plotly_chart(go.Figure(go.Scatter(x=x, y=norm.pdf(x, mu, sigma), fill='tozeroy', line_color='#2ecc71')), use_container_width=True)
 
-    with t4:
-        total_act = 0; act_vals = []
-        for i, n in enumerate(res["names"]):
-            if res["w"][i] > 0.005:
-                v = st.number_input(f"{n} (€)", value=float(res["w"][i]*current_val), key=f"re_{n}")
-                act_vals.append(v); total_act += v
-        if st.button("Run Rebalance"):
-            rdf = pd.DataFrame({"Asset":[n for i,n in enumerate(res["names"]) if res["w"][i]>0.005], "Actual":act_vals, "Target %":[w for w in res["w"] if w>0.005]})
-            rdf["Action"] = (rdf["Target %"] * total_act) - rdf["Actual"]
-            st.table(rdf.style.format({"Actual":"€{:,.0f}", "Target %":"{:.1%}", "Action":"€{:,.0f}"}))
+    with t5: # Advanced Risk View
+        st.subheader("Diversification Benefit Analysis")
+        # Waterfall Chart for Risk Contribution
+        risk_df = pd.DataFrame({"Asset": res["names"], "Risk Contribution %": res["risk_c"]})
+        risk_df = risk_df[risk_df["Risk Contribution %"] > 0.001]
+        fig_w = go.Figure(go.Waterfall(
+            name = "Risk", orientation = "v",
+            measure = ["relative"] * len(risk_df),
+            x = risk_df["Asset"],
+            y = risk_df["Risk Contribution %"] * 100,
+            connector = {"line":{"color":"rgb(63, 63, 63)"}},
+        ))
+        fig_w.update_layout(title="Where is your Risk coming from?", showlegend=False)
+        st.plotly_chart(fig_w, use_container_width=True)
+        st.info("💡 **Diversification Insight:** If an asset's 'Risk Contribution %' is lower than its 'Target Weight %', it is actively mitigating your overall risk.")
 
-    # --- 8. STRATEGIC NARRATIVE ---
+    # Narrative Section
     st.divider()
-    st.header("💎 Strategic Narrative")
     real_ret = res["ret"] - inflation
     payout = (tw * real_ret) / 12
     z = norm.ppf(1 - (1 - conf_level))
     worst = tw * np.exp(-z * res["vol"] * np.sqrt(horizon))
-
     c_n1, c_n2 = st.columns(2)
     with c_n1:
-        st.subheader("🏦 Passive Income")
-        st.metric("Monthly Payout", f"€{max(0, payout):,.0f}", help="The Safe Withdrawal amount based on real returns to keep principal intact.")
-        if res["tip"]: 
-            st.write(f"✅ **Tipping Point: Year {res['tip']}**")
-            st.caption("The year your portfolio growth exceeds your savings.")
+        st.metric("Monthly Payout", f"€{max(0, payout):,.0f}", help="Inflation-adjusted safe withdrawal.")
     with c_n2:
-        st.subheader("🛡️ Safety & Tax")
-        st.metric("Stress Floor", f"€{worst:,.0f}", help=f"Statistically, there is a {conf_level*100:.0f}% chance wealth stays above this level.")
-        st.write(f"💰 **LU Tax Advantage: €{tg * 0.40:,.0f}**")
-        st.caption("Estimated savings vs. a 40% capital gains tax regime.")
+        st.metric("Stress Floor", f"€{worst:,.0f}", help=f"Value at {conf_level*100}% confidence.")
