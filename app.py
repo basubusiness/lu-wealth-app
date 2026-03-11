@@ -18,7 +18,7 @@ default_market_data = {
     "Alts & REITs": {"Global REITs": [7.5, 18.0], "Gold": [8.0, 14.0], "Crypto": [25.0, 68.0]}
 }
 
-# --- 3. SIDEBAR (MOBILE FRIENDLY) ---
+# --- 3. SIDEBAR (STRICT ROW ALIGNMENT) ---
 st.sidebar.header("📂 JustETF Market Hub")
 
 def global_toggle():
@@ -45,7 +45,6 @@ for cat, assets in default_market_data.items():
         for asset, params in assets.items():
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1: 
-                # Default selection to prevent start-up errors
                 active = st.checkbox(asset, key=f"chk_{asset}", value=(asset == "All-World"))
             with c2: u_ret = st.number_input("R", 0.0, 100.0, float(params[0]), key=f"ret_{asset}", label_visibility="collapsed")
             with c3: u_vol = st.number_input("V", 0.1, 100.0, float(params[1]), key=f"vol_{asset}", label_visibility="collapsed")
@@ -54,7 +53,7 @@ for cat, assets in default_market_data.items():
 
 # --- 4. MAIN INPUTS ---
 st.title(f"🇱🇺 {risk_profile} Architect")
-c1, c2 = st.columns(2) # Stacking 2x2 for mobile better than 3 wide
+c1, c2 = st.columns(2)
 with c1:
     target_ret = st.number_input("Target Return %", 1.0, 25.0, 8.5) / 100
     current_val = st.number_input("Initial Capital (€)", value=100000)
@@ -62,8 +61,8 @@ with c2:
     monthly_add = st.number_input("Monthly Savings (€)", value=3000)
     horizon = st.slider("Horizon (Years)", 1, 40, 20)
 
-conf_level = 0.95
-inflation = 0.018
+conf_level = st.select_slider("Stress Confidence", [0.90, 0.95, 0.99], 0.95)
+inflation = st.number_input("Inflation %", value=1.8) / 100
 
 # --- 5. THE ENGINE ---
 def run_analysis():
@@ -83,58 +82,84 @@ def run_analysis():
         y = np.arange(0, horizon + 1)
         wth = [current_val*(1+r_an)**t + (monthly_add*12*((1+r_an)**t-1)/r_an if t>0 else 0) for t in y]
         inv = [current_val + (monthly_add * 12 * t) for t in y]
-        tip = next((t for t, g in enumerate([0] + [wth[i]-wth[i-1]-(monthly_add*12) for i in range(1, len(y))]) if g > (monthly_add*12)), None)
+        gns = [0] + [wth[i]-wth[i-1]-(monthly_add*12) for i in range(1, len(y))]
+        tip = next((t for t, g in enumerate(gns) if g > (monthly_add*12)), None)
         st.session_state.results = {"w": res.x, "ret": r_an, "vol": v_an, "wth": wth, "inv": inv, "y": y, "tip": tip, "names": f_names}
 
-# Auto-run if no results exist
 if st.session_state.results is None and len(f_rets) > 0:
     run_analysis()
 
-if st.button("🚀 Update Strategy"):
+if st.button("🚀 Calculate Strategy"):
     run_analysis()
 
 # --- 6. OUTPUT ---
 if st.session_state.results:
     res = st.session_state.results
     st.divider()
-    t1, t2, t3 = st.tabs(["📊 Mix", "📈 Wealth", "⚖️ Rebalance"])
+    t1, t2, t3, t4 = st.tabs(["📊 Mix", "📈 Path", "🔔 Risk", "⚖️ Rebalance"])
 
     with t1:
         tw, tp = res["wth"][-1], res["inv"][-1]
+        tg = tw - tp
         m1, m2 = st.columns(2)
-        m1.metric("Final Net Worth", f"€{tw:,.0f}")
-        m2.metric("Total Invested", f"€{tp:,.0f}")
+        m1.metric("Final Wealth", f"€{tw:,.0f}")
+        m2.metric("Total Gain", f"€{tg:,.0f}", f"+{(tg/tp)*100:.0f}%")
         
-        st.write("**Strategy Table**")
-        df = pd.DataFrame({
-            "Asset": res["names"], 
-            "Target %": res["w"], 
-            "Lump Sum": res["w"]*current_val,
-            "Monthly": res["w"]*monthly_add
-        })
+        m3, m4 = st.columns(2)
+        m3.metric("Invested", f"€{tp:,.0f}")
+        m4.metric("Monthly Buy", f"€{monthly_add:,.0f}")
+        
+        # Portfolio Composition
+        fig_b = go.Figure(go.Bar(y=['Total'], x=[tp], name='Invested', orientation='h', marker_color='gray'))
+        fig_b.add_trace(go.Bar(y=['Total'], x=[tg], name='Gains', orientation='h', marker_color='#2ecc71'))
+        fig_b.update_layout(barmode='stack', height=120, margin=dict(l=0,r=0,t=0,b=0), showlegend=False)
+        st.plotly_chart(fig_b, use_container_width=True)
+
+        df = pd.DataFrame({"Asset": res["names"], "Target %": res["w"], "Lump Sum": res["w"]*current_val, "Monthly": res["w"]*monthly_add})
         st.table(df[df["Target %"] > 0.005].style.format({"Target %":"{:.1%}", "Lump Sum":"€{:,.0f}", "Monthly":"€{:,.0f}"}))
 
     with t2:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=res["y"], y=res["wth"], name="Wealth", fill='tozeroy', line_color='#1f77b4'))
-        fig.add_trace(go.Scatter(x=res["y"], y=res["inv"], name="Principal", line=dict(color='black', dash='dash')))
-        fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02))
-        st.plotly_chart(fig, use_container_width=True)
+        fig_p = go.Figure()
+        fig_p.add_trace(go.Scatter(x=res["y"], y=res["wth"], name="Wealth", fill='tozeroy', line_color='#1f77b4'))
+        fig_p.add_trace(go.Scatter(x=res["y"], y=res["inv"], name="Principal", line=dict(color='black', dash='dash')))
+        if res["tip"]: fig_p.add_vline(x=res["tip"], line_dash="dot", line_color="#2ecc71")
+        fig_p.update_layout(margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02))
+        st.plotly_chart(fig_p, use_container_width=True)
 
     with t3:
-        st.write("**Current Portfolio Values**")
+        st.write("**Return Probability Distribution**")
+        mu, sigma = res["ret"], res["vol"]
+        x = np.linspace(mu-4*sigma, mu+4*sigma, 100)
+        fig_bell = go.Figure(go.Scatter(x=x, y=norm.pdf(x, mu, sigma), fill='tozeroy', line_color='#2ecc71'))
+        fig_bell.update_layout(margin=dict(l=0,r=0,t=0,b=0), xaxis_title="Annual Return %")
+        st.plotly_chart(fig_bell, use_container_width=True)
+
+    with t4:
+        st.subheader("⚖️ Interactive Rebalancer")
         total_act = 0; act_vals = []
         for i, n in enumerate(res["names"]):
             if res["w"][i] > 0.005:
                 v = st.number_input(f"{n} (€)", value=float(res["w"][i]*current_val), key=f"re_{n}")
                 act_vals.append(v); total_act += v
-        if st.button("⚖️ Run Rebalance"):
+        if st.button("Run Rebalance"):
             rdf = pd.DataFrame({"Asset":[n for i,n in enumerate(res["names"]) if res["w"][i]>0.005], "Actual":act_vals, "Target %":[w for w in res["w"] if w>0.005]})
             rdf["Action"] = (rdf["Target %"] * total_act) - rdf["Actual"]
             st.table(rdf.style.format({"Actual":"€{:,.0f}", "Target %":"{:.1%}", "Action":"€{:,.0f}"}))
 
+    # --- 7. STRATEGIC NARRATIVE ---
     st.divider()
+    st.header("💎 Strategic Narrative")
     real_ret = res["ret"] - inflation
     payout = (tw * real_ret) / 12
-    st.info(f"**Monthly Payout:** €{max(0, payout):,.0f}")
-    st.success(f"**Tax Shield:** €{(tw-tp)*0.40:,.0f}")
+    z = norm.ppf(1 - (1 - conf_level))
+    worst = tw * np.exp(-z * res["vol"] * np.sqrt(horizon))
+
+    c_n1, c_n2 = st.columns(2)
+    with c_n1:
+        st.subheader("🏦 Passive Income")
+        st.info(f"Monthly Payout: **€{max(0, payout):,.0f}** (Inflation-adjusted salary).")
+        if res["tip"]: st.success(f"**Tipping Point (Year {res['tip']}):** Wealth out-earns savings.")
+    with c_n2:
+        st.subheader("🛡️ Safety & Tax")
+        st.warning(f"**Stress Floor:** €{worst:,.0f} ({conf_level*100:.0f}% confidence).")
+        st.success(f"**LU Tax Advantage:** Shielding €{tg * 0.40:,.0f} in potential gains.")
