@@ -82,7 +82,6 @@ def run_analysis():
             wth.append((wth[-1] * (1 + r_an)) + yearly_contri)
             total_inv += yearly_contri
             inv.append(total_inv)
-        # Fix indexing for gains calculation
         gns = [0] + [wth[i]-wth[i-1]-((monthly_add*12)*((1+step_up)**(max(0,i-1)))) for i in range(1, len(y))]
         tip = next((t for t, g in enumerate(gns) if g > (monthly_add*12)*((1+step_up)**(max(0,t-1)))), None)
         st.session_state.results = {"w": res.x, "ret": r_an, "vol": v_an, "wth": wth, "inv": inv, "y": y, "tip": tip, "names": f_names}
@@ -101,7 +100,20 @@ if st.session_state.results:
         c_m1, c_m2 = st.columns(2)
         c_m1.metric("Final Wealth", f"€{tw:,.0f}", help="Total account value at the end of the horizon.")
         c_m2.metric("Total Gain", f"€{tg:,.0f}", f"+{(tg/tp)*100:.1f}%", help="Profit from growth (excludes principal).")
-        st.table(pd.DataFrame({"Asset": res["names"], "Target %": res["w"], "Lump Sum": res["w"]*current_val})[lambda x: x["Target %"] > 0.005].style.format({"Target %":"{:.1%}", "Lump Sum":"€{:,.0f}"}))
+        
+        # --- RESTORED MONTHLY CONTRIBUTION COLUMN ---
+        mix_df = pd.DataFrame({
+            "Asset": res["names"], 
+            "Target %": res["w"], 
+            "Lump Sum": res["w"]*current_val,
+            "Monthly Buy": res["w"]*monthly_add # Monthly buy at start
+        })
+        st.table(mix_df[mix_df["Target %"] > 0.005].style.format({
+            "Target %":"{:.1%}", 
+            "Lump Sum":"€{:,.0f}",
+            "Monthly Buy":"€{:,.0f}"
+        }))
+        st.caption(f"💡 Monthly Buy is based on your Year 1 savings of €{monthly_add:,.0f}/mo.")
 
     with t2:
         fig_p = go.Figure()
@@ -127,7 +139,7 @@ if st.session_state.results:
             rdf["Action"] = (rdf["Target %"] * total_act) - rdf["Actual"]
             st.table(rdf.style.format({"Actual":"€{:,.0f}", "Target %":"{:.1%}", "Action":"€{:,.0f}"}))
 
-    # --- 8. STRATEGIC NARRATIVE (CRASH-PROOF TOOLTIPS) ---
+    # --- 8. STRATEGIC NARRATIVE ---
     st.divider()
     st.header("💎 Strategic Narrative")
     real_ret = res["ret"] - inflation
@@ -138,11 +150,10 @@ if st.session_state.results:
     c_n1, c_n2 = st.columns(2)
     with c_n1:
         st.subheader("🏦 Passive Income")
-        # Moving tooltips to metric and clean labels to avoid st.info crash
         st.metric("Monthly Payout", f"€{max(0, payout):,.0f}", help="The Safe Withdrawal amount based on real returns to keep principal intact.")
         if res["tip"]: 
             st.write(f"✅ **Tipping Point: Year {res['tip']}**")
-            st.caption("The year your market gains exceed your contributions.")
+            st.caption("The year your portfolio growth exceeds your savings.")
     with c_n2:
         st.subheader("🛡️ Safety & Tax")
         st.metric("Stress Floor", f"€{worst:,.0f}", help=f"Statistically, there is a {conf_level*100:.0f}% chance wealth stays above this level.")
