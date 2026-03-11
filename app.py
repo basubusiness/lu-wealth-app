@@ -44,7 +44,10 @@ for cat, assets in default_market_data.items():
         st.caption("Asset | Ret% | Risk%")
         for asset, params in assets.items():
             c1, c2, c3 = st.columns([2, 1, 1])
-            with c1: active = st.checkbox(asset, key=f"chk_{asset}")
+            with c1: 
+                # OPTIMIZATION: Default 'All-World' to True so the app has data on load
+                default_val = True if asset == "All-World" else False
+                active = st.checkbox(asset, key=f"chk_{asset}", value=default_val)
             with c2: u_ret = st.number_input("R", 0.0, 100.0, float(params[0]), key=f"ret_{asset}", label_visibility="collapsed")
             with c3: u_vol = st.number_input("V", 0.1, 100.0, float(params[1]), key=f"vol_{asset}", label_visibility="collapsed")
             if active:
@@ -81,37 +84,50 @@ def run_analysis():
         inv = [current_val + (monthly_add * 12 * t) for t in y]
         tip = next((t for t, g in enumerate([0] + [wth[i]-wth[i-1]-(monthly_add*12) for i in range(1, len(y))]) if g > (monthly_add*12)), None)
         st.session_state.results = {"w": res.x, "ret": r_an, "vol": v_an, "wth": wth, "inv": inv, "y": y, "tip": tip, "names": f_names}
-    else:
-        st.error("Optimization failed. Try lowering Target Return or increasing Risk Profile.")
 
-st.button("🚀 Calculate Strategy", on_click=run_analysis)
+# AUTO-RUN ON FIRST LOAD
+if st.session_state.results is None:
+    run_analysis()
+
+st.button("🚀 Recalculate Strategy", on_click=run_analysis)
 
 # --- 6. DISPLAY ---
 if st.session_state.results:
     res = st.session_state.results
     st.divider()
-    t1, t2, t3, t4 = st.tabs(["📊 Summary", "📈 Wealth Path", "🔔 Risk Profile", "⚖️ Rebalancer"])
+    t1, t2, t3, t4 = st.tabs(["📊 Summary", "📈 Wealth Path", "🔔 Risk", "⚖️ Rebalancer"])
 
     with t1:
         tw, tp = res["wth"][-1], res["inv"][-1]
         tg = tw - tp
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("Future Net Worth", f"€{tw:,.0f}")
-        sc2.metric("Total Invested", f"€{tp:,.0f}")
-        sc3.metric("Growth Multiplier", f"+{(tg/tp)*100:.0f}%")
-        sc4.metric("Monthly Contri.", f"€{monthly_add:,.0f}")
+        # Responsive Metric Stacking
+        m1, m2 = st.columns(2)
+        m1.metric("Final Wealth", f"€{tw:,.0f}")
+        m2.metric("Total Gain", f"€{tg:,.0f}", f"+{(tg/tp)*100:.1f}%")
         
-        fig_b = go.Figure(go.Bar(y=['Wealth'], x=[tp], name='Principal', orientation='h', marker_color='gray'))
-        fig_b.add_trace(go.Bar(y=['Wealth'], x=[tg], name='Gains', orientation='h', marker_color='#2ecc71'))
-        fig_b.update_layout(barmode='stack', height=150, margin=dict(l=0,r=0,t=0,b=0))
-        st.plotly_chart(fig_b, use_container_width=True)
-        st.table(pd.DataFrame({"Asset": res["names"], "Target %": res["w"], "Target Value €": res["w"]*current_val}).style.format({"Target %":"{:.1%}", "Target Value €":"€{:,.0f}"}))
+        m3, m4 = st.columns(2)
+        m3.metric("Invested", f"€{tp:,.0f}")
+        m4.metric("Monthly Buy", f"€{monthly_add:,.0f}")
+
+        # Summary Table with Monthly Breakdown
+        df_mix = pd.DataFrame({
+            "Asset": res["names"], 
+            "Target %": res["w"], 
+            "Lump Sum €": res["w"]*current_val,
+            "Monthly Buy €": res["w"]*monthly_add  # ADDED AS REQUESTED
+        })
+        st.table(df_mix[df_mix["Target %"] > 0.005].style.format({
+            "Target %":"{:.1%}", 
+            "Lump Sum €":"€{:,.0f}",
+            "Monthly Buy €":"€{:,.0f}"
+        }))
 
     with t2:
         fig_p = go.Figure()
-        fig_p.add_trace(go.Scatter(x=res["y"], y=res["wth"], name="Net Worth", fill='tozeroy', line_color='#1f77b4'))
+        fig_p.add_trace(go.Scatter(x=res["y"], y=res["wth"], name="Wealth", fill='tozeroy', line_color='#1f77b4'))
         fig_p.add_trace(go.Scatter(x=res["y"], y=res["inv"], name="Principal", line=dict(color='black', dash='dash')))
         if res["tip"]: fig_p.add_vline(x=res["tip"], line_dash="dot", line_color="#2ecc71")
+        fig_p.update_layout(margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02))
         st.plotly_chart(fig_p, use_container_width=True)
 
     with t3:
@@ -120,17 +136,17 @@ if st.session_state.results:
         st.plotly_chart(go.Figure(go.Scatter(x=x, y=norm.pdf(x, mu, sigma), fill='tozeroy', line_color='#2ecc71')), use_container_width=True)
 
     with t4:
-        st.subheader("Interactive Portfolio Rebalancer")
+        st.subheader("⚖️ Interactive Rebalancer")
         total_act = 0; act_vals = []
         for i, n in enumerate(res["names"]):
             if res["w"][i] > 0.005:
-                v = st.number_input(f"Actual €: {n}", value=float(res["w"][i]*current_val), key=f"rebal_{n}")
+                v = st.number_input(f"Actual: {n}", value=float(res["w"][i]*current_val), key=f"rebal_{n}")
                 act_vals.append(v); total_act += v
-        if st.button("⚖️ Calculate Rebalance"):
-            rdf = pd.DataFrame({"Asset":[n for i,n in enumerate(res["names"]) if res["w"][i]>0.005], "Actual €":act_vals, "Target %":[w for w in res["w"] if w>0.005]})
+        if st.button("Calculate Rebalance"):
+            rdf = pd.DataFrame({"Asset":[n for i,n in enumerate(res["names"]) if res["w"][i]>0.005], "Actual":act_vals, "Target %":[w for w in res["w"] if w>0.005]})
             rdf["Target €"] = rdf["Target %"] * total_act
-            rdf["Action (€)"] = rdf["Target €"] - rdf["Actual €"]
-            st.table(rdf.style.format({"Actual €":"€{:,.0f}", "Target %":"{:.1%}", "Target €":"€{:,.0f}", "Action (€)":"€{:,.0f}"}))
+            rdf["Action"] = rdf["Target €"] - rdf["Actual"]
+            st.table(rdf.style.format({"Actual":"€{:,.0f}", "Target %":"{:.1%}", "Target €":"€{:,.0f}", "Action":"€{:,.0f}"}))
 
     # --- 7. NARRATIVE ---
     st.divider()
@@ -140,12 +156,7 @@ if st.session_state.results:
     z = norm.ppf(1 - (1 - conf_level))
     worst = tw * np.exp(-z * res["vol"] * np.sqrt(horizon))
 
-    c_n1, c_n2 = st.columns(2)
-    with c_n1:
-        st.subheader("🏦 Passive Income")
-        st.info(f"Monthly Payout: **€{max(0, payout):,.0f}**. This is your inflation-adjusted 'salary'.")
-        if res["tip"]: st.success(f"**Tipping Point (Year {res['tip']}):** Wealth out-earns your savings.")
-    with c_n2:
-        st.subheader("🛡️ Safety & Tax")
-        st.warning(f"**Stress Floor:** €{worst:,.0f} (worst case at {conf_level*100:.0f}% confidence).")
-        st.success(f"**LU Tax Advantage:** Potential tax shield of **€{tg * 0.40:,.0f}**.")
+    st.info(f"**Passive Income:** €{max(0, payout):,.0f}/mo.")
+    if res["tip"]: st.success(f"**Tipping Point:** Year {res['tip']}")
+    st.warning(f"**Stress Floor:** €{worst:,.0f}")
+    st.success(f"**LU Tax Advantage:** €{tg * 0.40:,.0f} potentially saved.")
