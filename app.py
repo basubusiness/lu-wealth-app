@@ -18,7 +18,7 @@ default_market_data = {
     "Alts & REITs": {"Global REITs": [7.5, 18.0], "Gold": [8.0, 14.0], "Crypto": [25.0, 68.0]}
 }
 
-# --- 3. SIDEBAR (STRICT ROW ALIGNMENT) ---
+# --- 3. SIDEBAR (MOBILE OPTIMIZED) ---
 st.sidebar.header("📂 JustETF Market Hub")
 
 def global_toggle():
@@ -64,7 +64,7 @@ with c2:
 conf_level = st.select_slider("Stress Confidence", [0.90, 0.95, 0.99], 0.95)
 inflation = st.number_input("Inflation %", value=1.8) / 100
 
-# --- 5. ENGINE ---
+# --- 5. THE ENGINE ---
 def run_analysis():
     n = len(f_rets)
     if n == 0: return 
@@ -103,7 +103,7 @@ if st.session_state.results:
         tg = tw - tp
         m1, m2 = st.columns(2)
         m1.metric("Final Wealth", f"€{tw:,.0f}")
-        m2.metric("Total Gain", f"€{tg:,.0f}", f"+{(tg/tp)*100:.0f}%")
+        m2.metric("Total Gain", f"€{tg:,.0f}", f"+{(tg/tp)*100:.1f}%")
         
         m3, m4 = st.columns(2)
         m3.metric("Invested", f"€{tp:,.0f}")
@@ -126,6 +126,7 @@ if st.session_state.results:
         st.plotly_chart(fig_p, use_container_width=True)
 
     with t3:
+        st.write("**Return Probability Distribution**")
         mu, sigma = res["ret"], res["vol"]
         x = np.linspace(mu-4*sigma, mu+4*sigma, 100)
         fig_bell = go.Figure(go.Scatter(x=x, y=norm.pdf(x, mu, sigma), fill='tozeroy', line_color='#2ecc71'))
@@ -144,9 +145,10 @@ if st.session_state.results:
             rdf["Action"] = (rdf["Target %"] * total_act) - rdf["Actual"]
             st.table(rdf.style.format({"Actual":"€{:,.0f}", "Target %":"{:.1%}", "Action":"€{:,.0f}"}))
 
-    # --- 7. STRATEGIC NARRATIVE (WITH TOOLTIPS) ---
+    # --- 7. STRATEGIC NARRATIVE (FIXED COMPATIBILITY) ---
     st.divider()
     st.header("💎 Strategic Narrative")
+    
     real_ret = res["ret"] - inflation
     payout = (tw * real_ret) / 12
     z = norm.ppf(1 - (1 - conf_level))
@@ -155,14 +157,15 @@ if st.session_state.results:
     c_n1, c_n2 = st.columns(2)
     with c_n1:
         st.subheader("🏦 Passive Income")
-        st.info(f"Monthly Payout: **€{max(0, payout):,.0f}**", 
-                help="Based on the 'Safe Withdrawal' logic where you only spend the REAL return (Net of Inflation) to preserve your capital forever.")
+        st.info(f"**Monthly Payout: €{max(0, payout):,.0f}**")
+        st.caption("💡 *Safe Withdrawal:* Spend only the REAL return to preserve capital forever.")
         if res["tip"]: 
-            st.success(f"**Tipping Point (Year {res['tip']})**", 
-                       help="The year your portfolio's annual growth exceeds your annual contributions. Your money is now working harder than you are.")
+            st.success(f"**Tipping Point: Year {res['tip']}**")
+            st.caption("💡 *Momentum:* When portfolio growth exceeds your annual savings.")
+            
     with c_n2:
         st.subheader("🛡️ Safety & Tax")
-        st.warning(f"**Stress Floor:** €{worst:,.0f}", 
-                   help=f"Statistically, there is only a {(1-conf_level)*100:.0f}% chance your portfolio drops below this value over the full horizon, based on your selected risk profile.")
-        st.success(f"**LU Tax Advantage:** €{tg * 0.40:,.0f}", 
-                   help="In Luxembourg, capital gains on UCITS ETFs are typically tax-exempt if held for >6 months. This figure estimates what you'd save vs. a 40% tax regime elsewhere.")
+        st.warning(f"**Stress Floor: €{worst:,.0f}**")
+        st.caption(f"💡 *Risk:* {conf_level*100:.0f}% confidence your floor holds over {horizon} years.")
+        st.success(f"**LU Tax Advantage: €{tg * 0.40:,.0f}**")
+        st.caption("💡 *Tax:* Estimated savings vs. 40% tax on long-term capital gains.")
