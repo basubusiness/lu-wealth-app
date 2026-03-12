@@ -31,7 +31,7 @@ ASSETS = {
     "Global REIT": {"return":0.065,"vol":0.18,"cat":"Equity"},
     "Euro Gov Bonds": {"return":0.03,"vol":0.06,"cat":"Bond"},
     "Corp Bonds": {"return":0.035,"vol":0.07,"cat":"Bond"},
-    "Gold": {"return":0.04,"vol":0.15,"cat":"Commodity"},
+    "Gold": {"return":0.065,"vol":0.17,"cat":"Commodity"},
     "Cash": {"return":0.02,"vol":0.01,"cat":"Cash"}
 }
 
@@ -79,13 +79,13 @@ def build_corr(selected):
 
 def optimize_portfolio(names, target_return):
 
-    rets = np.array([ASSETS[a]["return"] for a in names])
+    original_returns = np.array([ASSETS[a]["return"] for a in names])
     vols = np.array([ASSETS[a]["vol"] for a in names])
 
     shrink = ASSUMPTIONS["optimizer"]["return_shrinkage"]
-    rets = shrink * rets + (1-shrink) * np.mean(rets)
+    rets = shrink * original_returns + (1-shrink) * np.mean(original_returns)
 
-    max_possible = max(rets)
+    max_possible = max(original_returns)
 
     if target_return > max_possible:
         raise ValueError(
@@ -195,15 +195,15 @@ with col4:
     target_return_pct = st.number_input("Target Return %",3.0,10.0,6.5,step=0.1)
 
 with col5:
-    growth = st.slider("Saving Growth %",0,10,3)
+    growth_pct = st.slider("Saving Growth %",0,10,3)
 
 target_return = target_return_pct/100
-growth = growth/100
+growth = growth_pct/100
 
 selected = st.multiselect(
     "Assets",
     list(ASSETS.keys()),
-    default=["World Equity","US Equity","Euro Gov Bonds","Emerging Markets"]
+    default=list(ASSETS.keys())[:5]
 )
 
 # ---------------------------------------------------
@@ -234,10 +234,6 @@ if st.button("Build Plan"):
 
     plan = plan[plan["Weight"]>0.01]
 
-    # ---------------------------------------------------
-    # INVESTMENT TABLE
-    # ---------------------------------------------------
-
     st.subheader("Investment Plan")
 
     st.dataframe(
@@ -249,40 +245,28 @@ if st.button("Build Plan"):
         use_container_width=True
     )
 
-    # ---------------------------------------------------
-    # INSIGHT CARDS
-    # ---------------------------------------------------
-
     c1,c2,c3,c4 = st.columns(4)
 
     c1.metric(
         f"€{median[-1]:,.0f}",
-        f"Projected wealth after {years} years",
-        help="Estimated portfolio value at the end of your investment horizon based on long-term market averages."
+        f"Projected wealth after {years} years"
     )
 
     c2.metric(
         f"{port_r*100:.1f}%",
-        "Average yearly growth",
-        help="The average yearly return expected from this portfolio based on long-term asset returns."
+        "Average yearly growth"
     )
 
     c3.metric(
         f"{port_v*100:.1f}%",
-        "Year-to-year ups and downs",
-        help="Markets move up and down. This shows how much your portfolio may rise or fall in a typical year."
+        "Year-to-year ups and downs"
     )
 
     if tipping:
         c4.metric(
             f"Year {tipping} of {years}",
-            "When investment growth overtakes your savings",
-            help="Around this year, the growth from your investments each year becomes larger than the money you add from savings."
+            "When investment growth overtakes your savings"
         )
-
-    # ---------------------------------------------------
-    # CHART
-    # ---------------------------------------------------
 
     st.subheader("Wealth Growth")
 
@@ -294,40 +278,7 @@ if st.button("Build Plan"):
 
     fig = go.Figure()
 
-    fig.add_trace(
-        go.Scatter(
-            x=years_axis,
-            y=median,
-            name="Portfolio Value"
-        )
-    )
+    fig.add_trace(go.Scatter(x=years_axis,y=median,name="Portfolio Value"))
+    fig.add_trace(go.Scatter(x=years_axis,y=invested,name="Total Invested"))
 
-    fig.add_trace(
-        go.Scatter(
-            x=years_axis,
-            y=invested,
-            name="Total Invested"
-        )
-    )
-
-    fig.update_layout(
-        xaxis_title="Years",
-        yaxis_title="Portfolio Value (€)"
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ---------------------------------------------------
-    # FUTURE TABS
-    # ---------------------------------------------------
-
-    tab1,tab2,tab3 = st.tabs(["Portfolio Mix","Risk Scenarios","Engine Room"])
-
-    with tab1:
-        st.write("Allocation visuals will appear here.")
-
-    with tab2:
-        st.write("Monte Carlo risk distribution coming soon.")
-
-    with tab3:
-        st.write("Advanced model settings.")
+    st.plotly_chart(fig,use_container_width=True)
