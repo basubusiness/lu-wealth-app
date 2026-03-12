@@ -79,27 +79,26 @@ CORR_RULES = {
 
 def build_corr(selected):
 
-mat = pd.DataFrame(index=selected,columns=selected)
+    mat = pd.DataFrame(index=selected, columns=selected)
 
-for a in selected:
-    for b in selected:
+    for a in selected:
+        for b in selected:
 
-        ca = ASSETS[a]["cat"]
-        cb = ASSETS[b]["cat"]
+            ca = ASSETS[a]["cat"]
+            cb = ASSETS[b]["cat"]
 
-        if a == b:
-            mat.loc[a,b] = 1
-        else:
+            if a == b:
+                mat.loc[a, b] = 1
+            else:
 
-            key = (ca,cb)
+                key = (ca, cb)
 
-            if key not in CORR_RULES:
-                key = (cb,ca)
+                if key not in CORR_RULES:
+                    key = (cb, ca)
 
-            mat.loc[a,b] = CORR_RULES[key]
+                mat.loc[a, b] = CORR_RULES[key]
 
-return mat.astype(float)
-
+    return mat.astype(float)
 # ---------------------------------------------------
 # OPTIMIZER
 # ---------------------------------------------------
