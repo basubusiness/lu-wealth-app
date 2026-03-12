@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 
 # ---------------------------------------------------
-# ASSUMPTIONS
+# ASSUMPTION REGISTRY
 # ---------------------------------------------------
 
 MODEL_VERSION = "1.1"
@@ -57,7 +57,7 @@ CORR_RULES = {
 }
 
 # ---------------------------------------------------
-# CORRELATION MATRIX
+# BUILD CORRELATION MATRIX
 # ---------------------------------------------------
 
 def build_corr(selected):
@@ -94,7 +94,15 @@ def optimize_portfolio(names,target_return):
     shrink = ASSUMPTIONS["optimizer"]["return_shrinkage"]
     rets = shrink*rets + (1-shrink)*np.mean(rets)
 
+    max_possible = max(rets)
+
+    if target_return > max_possible:
+        raise ValueError(
+            f"Target return too high. Max achievable ≈ {max_possible*100:.1f}%"
+        )
+
     corr = build_corr(names)
+
     cov = np.diag(vols) @ corr.values @ np.diag(vols)
 
     def port_vol(w):
@@ -117,7 +125,7 @@ def optimize_portfolio(names,target_return):
     )
 
     if not res.success:
-        raise ValueError("Target return not achievable")
+        raise ValueError("Target return not achievable with selected assets")
 
     w = res.x
 
@@ -154,7 +162,7 @@ def simulate(mu,sigma,years,start,monthly,growth):
     return paths
 
 # ---------------------------------------------------
-# INSIGHTS
+# INSIGHT ENGINE
 # ---------------------------------------------------
 
 def compute_insights(paths,return_rate,monthly):
@@ -210,6 +218,7 @@ target_return = st.slider(
 )/100
 
 initial = st.number_input("Initial Capital €",10000,5000000,100000)
+
 monthly = st.number_input("Monthly Investment €",0,20000,3000)
 
 growth = st.slider("Contribution Growth %",0,10,3)/100
@@ -222,13 +231,20 @@ years = st.slider("Horizon (years)",1,40,20)
 
 if st.button("Build Plan"):
 
-    w,port_r,port_v = optimize_portfolio(selected,target_return)
+    try:
 
-    paths = simulate(port_r,port_v,years,initial,monthly,growth)
+        w,port_r,port_v = optimize_portfolio(selected,target_return)
 
-    validate_engine(w,port_v,paths)
+        paths = simulate(port_r,port_v,years,initial,monthly,growth)
 
-    median,monthly_growth,tipping = compute_insights(paths,port_r,monthly)
+        validate_engine(w,port_v,paths)
+
+        median,monthly_growth,tipping = compute_insights(paths,port_r,monthly)
+
+    except Exception as e:
+
+        st.error(str(e))
+        st.stop()
 
     st.header("Investment Plan")
 
