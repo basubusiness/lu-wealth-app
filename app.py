@@ -175,39 +175,36 @@ def compute_insights(paths, return_rate, monthly):
     return median, tipping
 
 # ---------------------------------------------------
-# INPUTS
+# INPUT BAR
 # ---------------------------------------------------
 
 st.title("LU Wealth Architect")
 
-selected = st.multiselect(
-    "Select Assets",
-    list(ASSETS.keys()),
-    default=list(ASSETS.keys())[:5]
-)
+col1,col2,col3,col4,col5 = st.columns(5)
 
-target_return_pct = st.number_input(
-    "Target Return %",
-    min_value=3.0,
-    max_value=10.0,
-    value=6.5,
-    step=0.1
-)
+with col1:
+    initial = st.number_input("Initial Capital",10000,5000000,100000)
 
-target_return = target_return_pct / 100
+with col2:
+    monthly = st.number_input("Monthly Saving",0,20000,3000)
 
-colA,colB,colC = st.columns(3)
-
-with colA:
-    initial = st.number_input("Initial Capital €",10000,5000000,100000)
-
-with colB:
-    monthly = st.number_input("Monthly Investment €",0,20000,3000)
-
-with colC:
+with col3:
     years = st.slider("Horizon (years)",1,40,20)
 
-growth = st.slider("Contribution Growth %",0,10,3)/100
+with col4:
+    target_return_pct = st.number_input("Target Return %",3.0,10.0,6.5,step=0.1)
+
+with col5:
+    growth = st.slider("Saving Growth %",0,10,3)
+
+target_return = target_return_pct/100
+growth = growth/100
+
+selected = st.multiselect(
+    "Assets",
+    list(ASSETS.keys()),
+    default=["World Equity","US Equity","Euro Gov Bonds","Emerging Markets"]
+)
 
 # ---------------------------------------------------
 # RUN MODEL
@@ -231,88 +228,106 @@ if st.button("Build Plan"):
     plan = pd.DataFrame({
         "Asset": selected,
         "Weight": w,
-        "Invest Today": w * initial,
-        "Monthly Invest": w * monthly
+        "Invest Now": w*initial,
+        "Monthly": w*monthly
     })
 
-    plan = plan[plan["Weight"] > 0.01]
+    plan = plan[plan["Weight"]>0.01]
 
     # ---------------------------------------------------
-    # TABS (STEPPER)
+    # INVESTMENT TABLE
     # ---------------------------------------------------
 
-    tab1, tab2 = st.tabs(["Investment Plan", "Wealth Growth"])
+    st.subheader("Investment Plan")
+
+    st.dataframe(
+        plan.style.format({
+            "Weight":"{:.1%}",
+            "Invest Now":"€{:,.0f}",
+            "Monthly":"€{:,.0f}"
+        }),
+        use_container_width=True
+    )
 
     # ---------------------------------------------------
-    # TAB 1 – PLAN
+    # INSIGHT CARDS
     # ---------------------------------------------------
+
+    c1,c2,c3,c4 = st.columns(4)
+
+    c1.metric(
+        f"€{median[-1]:,.0f}",
+        f"Projected wealth after {years} years",
+        help="Estimated portfolio value at the end of your investment horizon based on long-term market averages."
+    )
+
+    c2.metric(
+        f"{port_r*100:.1f}%",
+        "Average yearly growth",
+        help="The average yearly return expected from this portfolio based on long-term asset returns."
+    )
+
+    c3.metric(
+        f"{port_v*100:.1f}%",
+        "Year-to-year ups and downs",
+        help="Markets move up and down. This shows how much your portfolio may rise or fall in a typical year."
+    )
+
+    if tipping:
+        c4.metric(
+            f"Year {tipping} of {years}",
+            "When investment growth overtakes your savings",
+            help="Around this year, the growth from your investments each year becomes larger than the money you add from savings."
+        )
+
+    # ---------------------------------------------------
+    # CHART
+    # ---------------------------------------------------
+
+    st.subheader("Wealth Growth")
+
+    years_axis = list(range(len(median)))
+
+    invested = [
+        initial + monthly*12*i for i in years_axis
+    ]
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=years_axis,
+            y=median,
+            name="Portfolio Value"
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=years_axis,
+            y=invested,
+            name="Total Invested"
+        )
+    )
+
+    fig.update_layout(
+        xaxis_title="Years",
+        yaxis_title="Portfolio Value (€)"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ---------------------------------------------------
+    # FUTURE TABS
+    # ---------------------------------------------------
+
+    tab1,tab2,tab3 = st.tabs(["Portfolio Mix","Risk Scenarios","Engine Room"])
 
     with tab1:
-
-        st.subheader("Your Investment Plan")
-
-        col1,col2,col3,col4 = st.columns([3,1,1,1])
-
-        col1.markdown("**Asset**")
-        col2.markdown("**Weight**")
-        col3.markdown("**Invest Today**")
-        col4.markdown("**Monthly**")
-
-        for _,row in plan.iterrows():
-
-            c1,c2,c3,c4 = st.columns([3,1,1,1])
-
-            c1.write(row["Asset"])
-            c2.write(f"{row['Weight']*100:.0f}%")
-            c3.write(f"€{row['Invest Today']:,.0f}")
-            c4.write(f"€{row['Monthly Invest']:,.0f}")
-
-        st.divider()
-
-        c1,c2,c3,c4 = st.columns(4)
-
-        c1.metric("Expected Wealth", f"€{median[-1]:,.0f}")
-        c2.metric("Portfolio Return", f"{port_r*100:.2f}%")
-        c3.metric("Portfolio Risk", f"{port_v*100:.1f}%")
-
-        if tipping:
-            c4.metric("Compounding Year", tipping)
-
-    # ---------------------------------------------------
-    # TAB 2 – WEALTH PATH
-    # ---------------------------------------------------
+        st.write("Allocation visuals will appear here.")
 
     with tab2:
+        st.write("Monte Carlo risk distribution coming soon.")
 
-        st.subheader("Wealth Projection")
-
-        years_axis = list(range(len(median)))
-
-        invested = [
-            initial + monthly*12*i for i in years_axis
-        ]
-
-        fig = go.Figure()
-
-        fig.add_trace(
-            go.Scatter(
-                x=years_axis,
-                y=median,
-                name="Portfolio Value"
-            )
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=years_axis,
-                y=invested,
-                name="Total Invested"
-            )
-        )
-
-        fig.update_layout(
-            xaxis_title="Years",
-            yaxis_title="Portfolio Value (€)"
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
+    with tab3:
+        st.write("Advanced model settings.")
