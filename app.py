@@ -32,7 +32,7 @@ ASSUMPTIONS = {
 ASSETS = {
 
 "World Equity": {"return":0.075,"vol":0.16,"cat":"Equity"},
-"US Equity": {"return":0.078,"vol":0.17,"cat":"Equity"},
+"US Equity": {"return":0.080,"vol":0.17,"cat":"Equity"},
 "Emerging Markets": {"return":0.08,"vol":0.22,"cat":"Equity"},
 "Global REIT": {"return":0.065,"vol":0.18,"cat":"Equity"},
 "Euro Gov Bonds": {"return":0.03,"vol":0.06,"cat":"Bond"},
