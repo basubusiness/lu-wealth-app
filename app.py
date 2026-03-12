@@ -122,7 +122,10 @@ def optimize_portfolio(names,target):
 
         target = max_possible
 
-    corr = build_corr(names)
+    if "corr_override" in st.session_state:
+        corr = st.session_state["corr_override"]
+    else:
+        corr = build_corr(names)
     cov = np.diag(vols) @ corr.values @ np.diag(vols)
 
     max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
@@ -452,3 +455,5 @@ if st.button("Build Plan"):
         corr = build_corr(assets)
 
         edited_corr = st.data_editor(corr)
+        st.session_state["corr_override"] = edited_corr.values
+        
