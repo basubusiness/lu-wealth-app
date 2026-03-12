@@ -19,17 +19,19 @@ border:1px solid #e6e6e6;
 background-color:#fafafa;
 text-align:center;
 }
+
 .card-value {
 font-size:28px;
 font-weight:600;
+color:#1f2937;
 }
+
 .card-label {
 font-size:14px;
-color:#666;
+color:#6b7280;
 }
 </style>
 """, unsafe_allow_html=True)
-
 # ---------------------------------------------------
 # ASSUMPTIONS
 # ---------------------------------------------------
