@@ -10,12 +10,13 @@ st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 # ASSUMPTION REGISTRY
 # ---------------------------------------------------
 
-MODEL_VERSION = "1.1"
+MODEL_VERSION = "1.2"
 
 ASSUMPTIONS = {
 
 "optimizer": {
-"return_shrinkage": 0.4
+"return_shrinkage": 0.4,
+"diversification_penalty": 0.05
 },
 
 "simulation": {
@@ -57,7 +58,7 @@ CORR_RULES = {
 }
 
 # ---------------------------------------------------
-# BUILD CORRELATION MATRIX
+# CORRELATION MATRIX
 # ---------------------------------------------------
 
 def build_corr(selected):
@@ -83,7 +84,7 @@ def build_corr(selected):
     return mat.astype(float)
 
 # ---------------------------------------------------
-# PORTFOLIO OPTIMIZER (TARGET RETURN)
+# PORTFOLIO OPTIMIZER
 # ---------------------------------------------------
 
 def optimize_portfolio(names,target_return):
@@ -102,11 +103,17 @@ def optimize_portfolio(names,target_return):
         )
 
     corr = build_corr(names)
-
     cov = np.diag(vols) @ corr.values @ np.diag(vols)
 
-    def port_vol(w):
-        return np.sqrt(w.T @ cov @ w)
+    div_penalty = ASSUMPTIONS["optimizer"]["diversification_penalty"]
+
+    def objective(w):
+
+        vol = np.sqrt(w.T @ cov @ w)
+
+        concentration = np.sum(w**2)
+
+        return vol + div_penalty * concentration
 
     constraints = [
 
@@ -118,7 +125,7 @@ def optimize_portfolio(names,target_return):
     bounds = [(0,1)]*len(names)
 
     res = minimize(
-        port_vol,
+        objective,
         np.ones(len(names))/len(names),
         bounds=bounds,
         constraints=constraints
@@ -210,12 +217,15 @@ list(ASSETS.keys()),
 default=list(ASSETS.keys())[:5]
 )
 
-target_return = st.slider(
+target_return_pct = st.number_input(
 "Target Return %",
-3.0,
-10.0,
-6.5
-)/100
+min_value=3.0,
+max_value=10.0,
+value=6.5,
+step=0.1
+)
+
+target_return = target_return_pct / 100
 
 initial = st.number_input("Initial Capital €",10000,5000000,100000)
 
