@@ -175,7 +175,7 @@ def compute_insights(paths, return_rate, monthly):
     return median, tipping
 
 # ---------------------------------------------------
-# UI INPUTS
+# INPUTS
 # ---------------------------------------------------
 
 st.title("LU Wealth Architect")
@@ -196,10 +196,18 @@ target_return_pct = st.number_input(
 
 target_return = target_return_pct / 100
 
-initial = st.number_input("Initial Capital €",10000,5000000,100000)
-monthly = st.number_input("Monthly Investment €",0,20000,3000)
+colA,colB,colC = st.columns(3)
+
+with colA:
+    initial = st.number_input("Initial Capital €",10000,5000000,100000)
+
+with colB:
+    monthly = st.number_input("Monthly Investment €",0,20000,3000)
+
+with colC:
+    years = st.slider("Horizon (years)",1,40,20)
+
 growth = st.slider("Contribution Growth %",0,10,3)/100
-years = st.slider("Horizon (years)",1,40,20)
 
 # ---------------------------------------------------
 # RUN MODEL
@@ -220,12 +228,6 @@ if st.button("Build Plan"):
         st.error(str(e))
         st.stop()
 
-    # ---------------------------------------------------
-    # LANDING VIEW
-    # ---------------------------------------------------
-
-    st.header("Your Investment Plan")
-
     plan = pd.DataFrame({
         "Asset": selected,
         "Weight": w,
@@ -235,76 +237,82 @@ if st.button("Build Plan"):
 
     plan = plan[plan["Weight"] > 0.01]
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Invest Today")
-
-        for _,row in plan.iterrows():
-            st.write(f"€{row['Invest Today']:,.0f} — {row['Asset']}")
-
-    with col2:
-        st.subheader("Invest Monthly")
-
-        for _,row in plan.iterrows():
-            st.write(f"€{row['Monthly Invest']:,.0f} — {row['Asset']}")
-
-    st.divider()
-
     # ---------------------------------------------------
-    # INSIGHTS
+    # TABS (STEPPER)
     # ---------------------------------------------------
 
-    c1,c2,c3,c4 = st.columns(4)
+    tab1, tab2 = st.tabs(["Investment Plan", "Wealth Growth"])
 
-    with c1:
-        st.metric("Expected Wealth", f"€{median[-1]:,.0f}")
+    # ---------------------------------------------------
+    # TAB 1 – PLAN
+    # ---------------------------------------------------
 
-    with c2:
-        st.metric("Portfolio Return", f"{port_r*100:.2f}%")
+    with tab1:
 
-    with c3:
-        st.metric("Portfolio Risk", f"{port_v*100:.1f}%")
+        st.subheader("Your Investment Plan")
 
-    with c4:
+        col1,col2,col3,col4 = st.columns([3,1,1,1])
+
+        col1.markdown("**Asset**")
+        col2.markdown("**Weight**")
+        col3.markdown("**Invest Today**")
+        col4.markdown("**Monthly**")
+
+        for _,row in plan.iterrows():
+
+            c1,c2,c3,c4 = st.columns([3,1,1,1])
+
+            c1.write(row["Asset"])
+            c2.write(f"{row['Weight']*100:.0f}%")
+            c3.write(f"€{row['Invest Today']:,.0f}")
+            c4.write(f"€{row['Monthly Invest']:,.0f}")
+
+        st.divider()
+
+        c1,c2,c3,c4 = st.columns(4)
+
+        c1.metric("Expected Wealth", f"€{median[-1]:,.0f}")
+        c2.metric("Portfolio Return", f"{port_r*100:.2f}%")
+        c3.metric("Portfolio Risk", f"{port_v*100:.1f}%")
+
         if tipping:
-            st.metric("Compounding Year", tipping)
-
-    st.divider()
+            c4.metric("Compounding Year", tipping)
 
     # ---------------------------------------------------
-    # WEALTH PATH
+    # TAB 2 – WEALTH PATH
     # ---------------------------------------------------
 
-    st.subheader("Wealth Growth")
+    with tab2:
 
-    years_axis = list(range(len(median)))
+        st.subheader("Wealth Projection")
 
-    invested = [
-        initial + monthly*12*i for i in years_axis
-    ]
+        years_axis = list(range(len(median)))
 
-    fig = go.Figure()
+        invested = [
+            initial + monthly*12*i for i in years_axis
+        ]
 
-    fig.add_trace(
-        go.Scatter(
-            x=years_axis,
-            y=median,
-            name="Portfolio Value"
+        fig = go.Figure()
+
+        fig.add_trace(
+            go.Scatter(
+                x=years_axis,
+                y=median,
+                name="Portfolio Value"
+            )
         )
-    )
 
-    fig.add_trace(
-        go.Scatter(
-            x=years_axis,
-            y=invested,
-            name="Total Invested"
+        fig.add_trace(
+            go.Scatter(
+                x=years_axis,
+                y=invested,
+                name="Total Invested"
+            )
         )
-    )
 
-    fig.update_layout(
-        xaxis_title="Years",
-        yaxis_title="Portfolio Value (€)"
-    )
+        fig.update_layout(
+            xaxis_title="Years",
+            yaxis_title="Portfolio Value (€)"
+        )
 
-    st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
