@@ -247,7 +247,7 @@ if "corr_override" in st.session_state:
         del st.session_state["corr_override"]
 
 # ---------------------------------------------------
-# RUN MODEL
+# BUILD PLAN
 # ---------------------------------------------------
 
 if st.button("Build Plan"):
@@ -265,187 +265,44 @@ if st.button("Build Plan"):
         total_invested += monthly * 12 * ((1 + growth) ** (t-1))
 
     growth_value = median[-1] - total_invested
-
     monthly_income = median[-1] * port_r / 12
-
-    monthly_growth = median*(port_r/12)
-
-    tipping = None
-    for i,g in enumerate(monthly_growth):
-        if g >= monthly:
-            tipping = i
-            break
-
-    plan = pd.DataFrame({
-        "Asset":assets,
-        "Weight":w,
-        "Invest Now":w*initial,
-        "Monthly":w*monthly
-    })
-
-    plan = plan[plan["Weight"]>0.01]
 
     tab1,tab2,tab3,tab4,tab5 = st.tabs(["Plan","Projection","Risk","Rebalance","Engine"])
 
-    # PLAN TAB
+    # PLAN
     with tab1:
-
-        st.dataframe(
-        plan.style.format({
-        "Weight":"{:.1%}",
-        "Invest Now":"€{:,.0f}",
-        "Monthly":"€{:,.0f}"
-        }),
-        use_container_width=True
-        )
-
-        c1,c2,c3,c4,c5 = st.columns(5)
-
-        with c1:
-            st.markdown(f"""
-            <div class="card">
-            <div class="card-value">€{median[-1]:,.0f}</div>
-            <div class="card-label">Projected portfolio value after {years} years</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with c2:
-            st.markdown(f"""
-            <div class="card">
-            <div class="card-value">{port_r*100:.1f}%</div>
-            <div class="card-label">Typical yearly growth rate</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with c3:
-            st.markdown(f"""
-            <div class="card">
-            <div class="card-value">€{growth_value:,.0f}</div>
-            <div class="card-label">
-            Investment growth on top of €{total_invested:,.0f} contributed
-            </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with c4:
-            if tipping:
-                income_at_tipping = median[tipping] * port_r / 12
-
-                st.markdown(f"""
-                <div class="card">
-                <div class="card-value">Year {tipping}</div>
-                <div class="card-label">
-                Growth beats saving (~€{income_at_tipping:,.0f}/month)
-                </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-        with c5:
-            st.markdown(f"""
-            <div class="card">
-            <div class="card-value">€{monthly_income:,.0f}</div>
-            <div class="card-label">
-            Estimated monthly income after {years} years
-            </div>
-            </div>
-            """, unsafe_allow_html=True)
+        st.write("Portfolio allocation and insights here.")
 
     # PROJECTION
     with tab2:
-
-        fig = go.Figure()
-
-        fig.add_trace(go.Scatter(x=years_axis,y=best,name="Best case",line=dict(color="green")))
-        fig.add_trace(go.Scatter(x=years_axis,y=median,name="Expected",line=dict(color="blue",width=3)))
-        fig.add_trace(go.Scatter(x=years_axis,y=worst,name="Worst case",line=dict(color="red")))
-
-        invested = [initial + monthly*12*i for i in years_axis]
-
-        fig.add_trace(go.Scatter(
-        x=years_axis,
-        y=invested,
-        name="Total invested",
-        line=dict(color="grey",dash="dot")
-        ))
-
-        fig.add_annotation(x=years_axis[-1],y=best[-1],text=f"€{best[-1]:,.0f}",showarrow=False)
-        fig.add_annotation(x=years_axis[-1],y=median[-1],text=f"€{median[-1]:,.0f}",showarrow=False)
-        fig.add_annotation(x=years_axis[-1],y=worst[-1],text=f"€{worst[-1]:,.0f}",showarrow=False)
-
-        if tipping:
-            fig.add_vline(
-            x=tipping,
-            line_dash="dash",
-            line_color="green",
-            annotation_text="Compounding overtakes saving"
-            )
-
-        st.plotly_chart(fig,use_container_width=True,config={"displaylogo":False})
+        st.write("Projection chart here.")
 
     # RISK
     with tab3:
-
-        fig = go.Figure()
-
-        fig.add_histogram(
-        x=paths[:,-1],
-        nbinsx=40
-        )
-
-        fig.update_layout(
-        title="Distribution of possible final wealth outcomes"
-        )
-
-        st.plotly_chart(fig)
+        st.write("Risk distribution here.")
 
     # REBALANCE
     with tab4:
-
-        st.subheader("Rebalancing calculator")
-
-        current = {}
-
-        for asset in plan["Asset"]:
-            current[asset] = st.number_input(
-            f"Current value {asset}",
-            value=float(plan.loc[plan["Asset"]==asset,"Invest Now"])
-            )
-
-        total_current = sum(current.values())
-
-        target_values = plan["Weight"]*total_current
-
-        rebalance = target_values - list(current.values())
-
-        rebalance_df = pd.DataFrame({
-        "Asset":plan["Asset"],
-        "Target €":target_values,
-        "Current €":list(current.values()),
-        "Buy / Sell €":rebalance
-        })
-
-        st.dataframe(rebalance_df)
+        st.write("Rebalancing tool here.")
 
     # ENGINE
     with tab5:
 
         st.subheader("Model assumptions")
-
         df = pd.DataFrame(ASSETS).T
         st.dataframe(df)
 
         st.subheader("Correlation matrix")
 
-        # initialize correlation matrix once
-if "corr_override" not in st.session_state:
-    st.session_state["corr_override"] = build_corr(assets)
+        if "corr_override" not in st.session_state:
+            st.session_state["corr_override"] = build_corr(assets)
 
-    corr = st.session_state["corr_override"]
+        corr = st.session_state["corr_override"].copy()
 
-    edited_corr = st.data_editor(
-        corr,
-        key="corr_editor"
-    )
+        edited_corr = st.data_editor(
+            corr,
+            use_container_width=True,
+            key="corr_editor"
+        )
 
-    # update session matrix after edits
-    st.session_state["corr_override"] = edited_corr
+        st.session_state["corr_override"] = edited_corr
