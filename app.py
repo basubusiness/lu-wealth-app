@@ -46,7 +46,7 @@ ASSUMPTIONS = {
 }
 
 # ---------------------------------------------------
-# ASSETS
+# ASSET UNIVERSE
 # ---------------------------------------------------
 
 ASSETS = {
@@ -110,10 +110,17 @@ def optimize_portfolio(names,target):
     shrink = ASSUMPTIONS["optimizer"]["return_shrinkage"]
     rets = shrink*original_returns + (1-shrink)*np.mean(original_returns)
 
-    if "corr_override" in st.session_state:
-        corr = np.array(st.session_state["corr_override"])
-    else:
-        corr = build_corr(names).values
+    max_possible = max(original_returns)
+
+    if target > max_possible:
+
+        st.warning(
+            f"Target return too high. Max achievable ≈ {max_possible*100:.1f}%"
+        )
+
+        target = max_possible
+
+    corr = build_corr(names).values
 
     cov = np.diag(vols) @ corr @ np.diag(vols)
 
@@ -137,6 +144,7 @@ def optimize_portfolio(names,target):
 
     return w,port_r,port_v
 
+
 # ---------------------------------------------------
 # MONTE CARLO
 # ---------------------------------------------------
@@ -144,7 +152,6 @@ def optimize_portfolio(names,target):
 def simulate(mu,sigma,years,start,monthly,growth):
 
     sims = ASSUMPTIONS["simulation"]["paths"]
-
     paths = np.zeros((sims,years+1))
     paths[:,0] = start
 
@@ -162,6 +169,7 @@ def simulate(mu,sigma,years,start,monthly,growth):
 
     return paths
 
+
 def scenario_paths(paths,confidence):
 
     lower = (1-confidence)/2
@@ -172,6 +180,7 @@ def scenario_paths(paths,confidence):
     best = np.percentile(paths,upper*100,axis=0)
 
     return worst,median,best
+
 
 # ---------------------------------------------------
 # INPUTS
@@ -206,10 +215,6 @@ assets = st.multiselect(
 list(ASSETS.keys()),
 default=list(ASSETS.keys())[:5]
 )
-
-if "corr_override" in st.session_state:
-    if st.session_state["corr_override"].shape[0] != len(assets):
-        del st.session_state["corr_override"]
 
 # ---------------------------------------------------
 # RUN MODEL
@@ -292,17 +297,6 @@ if st.button("Build Plan"):
         df = pd.DataFrame(ASSETS).T
         st.dataframe(df)
 
-        st.subheader("Correlation matrix")
+        st.subheader("Default correlation matrix")
 
-        if "corr_override" not in st.session_state:
-            st.session_state["corr_override"] = build_corr(assets)
-
-        corr = st.session_state["corr_override"].copy()
-
-        edited_corr = st.data_editor(
-            corr,
-            use_container_width=True,
-            key="corr_editor"
-        )
-
-        st.session_state["corr_override"] = edited_corr
+        st.dataframe(build_corr(assets))
