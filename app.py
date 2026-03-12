@@ -2,82 +2,85 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-from scipy.stats import norm
 import plotly.graph_objects as go
+
+# ---------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------
 
 st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 
-# -----------------------------
-# SESSION STATE
-# -----------------------------
-if 'results' not in st.session_state:
+if "results" not in st.session_state:
     st.session_state.results = None
 
-# -----------------------------
-# DATASET
-# -----------------------------
+# ---------------------------------------------------
+# DATA
+# ---------------------------------------------------
+
 default_market_data = {
-    "Global Core": {
+    "Global Equity": {
         "World Equity": [7.5, 16],
-        "All-World": [7.3, 16.5],
-        "World Small Cap": [8.5, 20]
-    },
-    "Regional Equity": {
         "US (S&P 500)": [7.8, 17],
         "Europe 600": [7.0, 16],
-        "Emerging Mkts": [8.0, 22]
+        "Emerging Markets": [8.0, 22],
+        "World Small Cap": [8.5, 20]
     },
     "Diversifiers": {
-        "Gold": [4.0, 15],
-        "Global REITs": [6.5, 18]
+        "Global REITs": [6.5, 18],
+        "Gold": [4.0, 15]
     },
     "Defensive": {
         "Euro Gov Bonds": [3.0, 6],
         "Corp Bonds": [3.5, 7],
-        "Cash/MM": [2.0, 1]
+        "Cash": [2.0, 1]
     }
 }
 
-all_names = [a for cat in default_market_data.values() for a in cat.keys()]
+all_assets = [a for cat in default_market_data.values() for a in cat]
 
-# -----------------------------
-# DEFAULT CORRELATION MATRIX
-# -----------------------------
-if 'corr_matrix' not in st.session_state:
+# ---------------------------------------------------
+# CORRELATION MATRIX DEFAULT
+# ---------------------------------------------------
 
-    df = pd.DataFrame(0.25, index=all_names, columns=all_names)
+if "corr_matrix" not in st.session_state:
 
-    for a in all_names:
-        df.loc[a, a] = 1
+    corr = pd.DataFrame(0.25, index=all_assets, columns=all_assets)
+
+    for a in all_assets:
+        corr.loc[a, a] = 1
 
     equities = [
-        "World Equity","All-World","World Small Cap",
-        "US (S&P 500)","Europe 600","Emerging Mkts"
+        "World Equity",
+        "US (S&P 500)",
+        "Europe 600",
+        "Emerging Markets",
+        "World Small Cap"
     ]
 
     for a in equities:
         for b in equities:
             if a != b:
-                df.loc[a,b] = 0.85
+                corr.loc[a, b] = 0.85
 
-    df.loc["Gold", equities] = 0.05
-    df.loc[equities, "Gold"] = 0.05
+    corr.loc["Gold", equities] = 0.05
+    corr.loc[equities, "Gold"] = 0.05
 
-    df.loc["Global REITs", equities] = 0.7
-    df.loc[equities, "Global REITs"] = 0.7
+    corr.loc["Global REITs", equities] = 0.7
+    corr.loc[equities, "Global REITs"] = 0.7
 
-    df.loc["Euro Gov Bonds", equities] = 0.2
-    df.loc[equities, "Euro Gov Bonds"] = 0.2
+    corr.loc["Euro Gov Bonds", equities] = 0.2
+    corr.loc[equities, "Euro Gov Bonds"] = 0.2
 
-    st.session_state.corr_matrix = df
+    st.session_state.corr_matrix = corr
 
-# -----------------------------
-# MATRIX SAFETY
-# -----------------------------
+# ---------------------------------------------------
+# MATRIX CLEANER
+# ---------------------------------------------------
+
 def clean_corr_matrix(corr):
 
-    corr = (corr + corr.T)/2
-    np.fill_diagonal(corr.values,1)
+    corr = (corr + corr.T) / 2
+    np.fill_diagonal(corr.values, 1)
 
     eigvals, eigvecs = np.linalg.eigh(corr)
 
@@ -85,260 +88,236 @@ def clean_corr_matrix(corr):
 
     corr_psd = eigvecs @ np.diag(eigvals) @ eigvecs.T
 
-    corr_psd = pd.DataFrame(
-        corr_psd,
-        index=corr.index,
-        columns=corr.columns
-    )
+    return pd.DataFrame(corr_psd, index=corr.index, columns=corr.columns)
 
-    return corr_psd
-
-
-# -----------------------------
+# ---------------------------------------------------
 # MONTE CARLO
-# -----------------------------
+# ---------------------------------------------------
+
 def monte_carlo_paths(mu, sigma, years, start, contrib, step_up, sims=2000):
 
-    paths = np.zeros((sims, years+1))
-    paths[:,0] = start
+    paths = np.zeros((sims, years + 1))
+    paths[:, 0] = start
 
     for s in range(sims):
 
-        val = start
+        value = start
 
-        for t in range(1,years+1):
+        for t in range(1, years + 1):
 
             r = np.random.normal(mu, sigma)
 
-            yc = contrib*12*((1+step_up)**(t-1))
+            yearly_contribution = contrib * 12 * ((1 + step_up) ** (t - 1))
 
-            val = val*(1+r) + yc
+            value = value * (1 + r) + yearly_contribution
 
-            paths[s,t] = val
+            paths[s, t] = value
 
     return paths
 
-
-# -----------------------------
+# ---------------------------------------------------
 # SIDEBAR
-# -----------------------------
-st.sidebar.header("Market Hub")
+# ---------------------------------------------------
+
+st.sidebar.header("Portfolio Inputs")
 
 risk_profile = st.sidebar.select_slider(
     "Risk Profile",
-    ["Conservative","Balanced","Aggressive"],
-    "Balanced"
+    ["Conservative", "Balanced", "Aggressive"],
+    value="Balanced"
 )
 
 risk_caps = {
-    "Conservative":0.25,
-    "Balanced":0.45,
-    "Aggressive":0.8
+    "Conservative": 0.25,
+    "Balanced": 0.45,
+    "Aggressive": 0.8
 }
 
 crisis_mode = st.sidebar.checkbox("Stress Crisis Correlations")
 
-# -----------------------------
-# ASSET INPUTS
-# -----------------------------
-f_rets=[]
-f_vols=[]
-f_names=[]
+# ---------------------------------------------------
+# ASSET INPUT
+# ---------------------------------------------------
 
-for cat,assets in default_market_data.items():
+selected_names = []
+returns = []
+vols = []
 
-    with st.sidebar.expander(cat,expanded=True):
+for category, assets in default_market_data.items():
 
-        for asset,params in assets.items():
+    with st.sidebar.expander(category, expanded=True):
 
-            c1,c2,c3 = st.columns([2,1,1])
+        for asset, params in assets.items():
+
+            c1, c2, c3 = st.columns([2,1,1])
 
             with c1:
-                active = st.checkbox(asset,value=True,key=f"chk_{asset}")
+                active = st.checkbox(asset, value=True)
 
             with c2:
-                r = st.number_input(
-                    "R",
-                    value=float(params[0]),
-                    key=f"ret_{asset}",
-                    label_visibility="collapsed"
-                )
+                r = st.number_input("Return", value=float(params[0]), key=f"ret_{asset}")
 
             with c3:
-                v = st.number_input(
-                    "V",
-                    value=float(params[1]),
-                    key=f"vol_{asset}",
-                    label_visibility="collapsed"
-                )
+                v = st.number_input("Vol", value=float(params[1]), key=f"vol_{asset}")
 
             if active:
+                selected_names.append(asset)
+                returns.append(r / 100)
+                vols.append(v / 100)
 
-                f_names.append(asset)
-                f_rets.append(r/100)
-                f_vols.append(v/100)
+# ---------------------------------------------------
+# MAIN INPUTS
+# ---------------------------------------------------
 
-# -----------------------------
-# INPUTS
-# -----------------------------
 st.title("🇱🇺 Wealth Architect")
 
-col1,col2 = st.columns(2)
+col1, col2 = st.columns(2)
 
 with col1:
 
-    target_ret = st.number_input("Target Return %",1.0,20.0,7.0)/100
-
-    current_val = st.number_input("Initial Capital",value=100000)
-
-    step_up = st.slider("Contribution Growth %",0,10,3)/100
+    target_return = st.number_input("Target Return %", 1.0, 15.0, 6.5) / 100
+    initial_capital = st.number_input("Initial Capital €", value=100000)
+    step_up = st.slider("Contribution Growth %", 0, 10, 3) / 100
 
 with col2:
 
-    monthly_add = st.number_input("Monthly Savings",value=3000)
+    monthly_savings = st.number_input("Monthly Savings €", value=3000)
+    horizon = st.slider("Years", 1, 40, 20)
+    inflation = st.number_input("Inflation %", value=2.0) / 100
 
-    horizon = st.slider("Years",1,40,20)
+# ---------------------------------------------------
+# CALCULATE BUTTON
+# ---------------------------------------------------
 
-    inflation = st.number_input("Inflation %",value=2.0)/100
-
-
-# -----------------------------
-# OPTIMIZATION
-# -----------------------------
 if st.button("Calculate Strategy"):
 
-    n=len(f_rets)
+    if len(selected_names) == 0:
+        st.error("Select at least one asset.")
+        st.stop()
 
-    if n>0:
+    rets = np.array(returns)
+    vols = np.array(vols)
 
-        # ---- return shrinkage ----
-        rets = np.array(f_rets)
+    # Return shrinkage
+    avg_ret = np.mean(rets)
+    shrink = 0.4
+    shrunk_returns = shrink * rets + (1 - shrink) * avg_ret
 
-        avg_ret = np.mean(rets)
+    if target_return > max(shrunk_returns):
+        st.error("Target return is higher than any asset return.")
+        st.stop()
 
-        shrink = 0.4
+    corr = st.session_state.corr_matrix.loc[selected_names, selected_names]
 
-        shrunk_rets = shrink*rets + (1-shrink)*avg_ret
+    if crisis_mode:
 
-        # ---- correlations ----
-        corr = st.session_state.corr_matrix.loc[f_names,f_names]
+        equity_mask = corr.index.str.contains("Equity|S&P|Europe|Emerging|Small")
 
-        if crisis_mode:
+        corr.loc[equity_mask, equity_mask] = 0.95
 
-            eq_mask = corr.index.str.contains("Equity|S&P|Europe|Emerging")
+    corr = clean_corr_matrix(corr)
 
-            corr.loc[eq_mask,eq_mask] = 0.95
+    cov = np.diag(vols) @ corr.values @ np.diag(vols)
 
-        corr = clean_corr_matrix(corr)
+    # ---------------------------------------------------
+    # OPTIMIZATION
+    # ---------------------------------------------------
 
-        vol_diag = np.diag(f_vols)
+    n = len(rets)
 
-        cov = vol_diag @ corr.values @ vol_diag
+    def portfolio_vol(w):
+        return np.sqrt(w.T @ cov @ w)
 
-        # ---- optimizer ----
-        def obj(w):
-            return np.sqrt(w.T @ cov @ w)
+    constraints = [
+        {'type':'eq','fun':lambda w: np.sum(w) - 1},
+        {'type':'ineq','fun':lambda w: w @ shrunk_returns - target_return}
+    ]
 
-        cons = [
-            {'type':'eq','fun':lambda w:np.sum(w)-1},
-            {'type':'ineq','fun':lambda w:w@shrunk_rets-target_ret}
-        ]
+    bounds = [(0, risk_caps[risk_profile])] * n
 
-        bounds = [(0,risk_caps[risk_profile])]*n
+    result = minimize(portfolio_vol, np.ones(n)/n, bounds=bounds, constraints=constraints)
 
-        res = minimize(obj,[1/n]*n,bounds=bounds,constraints=cons)
+    if not result.success:
+        st.error("Optimizer could not find a feasible portfolio.")
+        st.stop()
 
-        if res.success:
+    weights = result.x
 
-            w = res.x
+    port_return = weights @ shrunk_returns
+    port_vol = np.sqrt(weights.T @ cov @ weights)
 
-            port_ret = w @ shrunk_rets
+    # ---------------------------------------------------
+    # MONTE CARLO
+    # ---------------------------------------------------
 
-            port_vol = np.sqrt(w.T @ cov @ w)
+    paths = monte_carlo_paths(
+        port_return,
+        port_vol,
+        horizon,
+        initial_capital,
+        monthly_savings,
+        step_up
+    )
 
-            # Monte Carlo
-            paths = monte_carlo_paths(
-                port_ret,
-                port_vol,
-                horizon,
-                current_val,
-                monthly_add,
-                step_up
-            )
+    median = np.median(paths, axis=0)
+    p10 = np.percentile(paths, 10, axis=0)
+    p90 = np.percentile(paths, 90, axis=0)
 
-            median = np.median(paths,axis=0)
-            p10 = np.percentile(paths,10,axis=0)
-            p90 = np.percentile(paths,90,axis=0)
+    st.session_state.results = {
+        "weights": weights,
+        "names": selected_names,
+        "return": port_return,
+        "vol": port_vol,
+        "years": np.arange(horizon + 1),
+        "median": median,
+        "p10": p10,
+        "p90": p90
+    }
 
-            st.session_state.results = {
-                "weights":w,
-                "ret":port_ret,
-                "vol":port_vol,
-                "median":median,
-                "p10":p10,
-                "p90":p90,
-                "years":np.arange(horizon+1),
-                "names":f_names
-            }
-
-# -----------------------------
+# ---------------------------------------------------
 # OUTPUT
-# -----------------------------
+# ---------------------------------------------------
+
 if st.session_state.results:
 
     r = st.session_state.results
 
-    tabs = st.tabs(["Portfolio","Wealth Simulation"])
+    tab1, tab2 = st.tabs(["Portfolio", "Monte Carlo"])
 
-    # -----------------------------
-    # PORTFOLIO
-    # -----------------------------
-    with tabs[0]:
+    with tab1:
 
-        st.metric("Expected Return",f"{r['ret']*100:.2f}%")
-
-        st.metric("Volatility",f"{r['vol']*100:.2f}%")
+        st.metric("Expected Return", f"{r['return']*100:.2f}%")
+        st.metric("Volatility", f"{r['vol']*100:.2f}%")
 
         df = pd.DataFrame({
-            "Asset":r["names"],
-            "Weight":r["weights"]
+            "Asset": r["names"],
+            "Weight": r["weights"]
         })
 
         st.table(df.style.format({"Weight":"{:.1%}"}))
 
-
-    # -----------------------------
-    # MONTE CARLO CHART
-    # -----------------------------
-    with tabs[1]:
+    with tab2:
 
         fig = go.Figure()
 
-        fig.add_trace(
-            go.Scatter(
-                x=r["years"],
-                y=r["median"],
-                name="Median",
-                line=dict(width=4)
-            )
-        )
+        fig.add_trace(go.Scatter(
+            x=r["years"],
+            y=r["median"],
+            name="Median"
+        ))
 
-        fig.add_trace(
-            go.Scatter(
-                x=r["years"],
-                y=r["p10"],
-                name="Pessimistic (10%)",
-                line=dict(dash="dash")
-            )
-        )
+        fig.add_trace(go.Scatter(
+            x=r["years"],
+            y=r["p10"],
+            name="10% Worst Case",
+            line=dict(dash="dash")
+        ))
 
-        fig.add_trace(
-            go.Scatter(
-                x=r["years"],
-                y=r["p90"],
-                name="Optimistic (90%)",
-                line=dict(dash="dash")
-            )
-        )
+        fig.add_trace(go.Scatter(
+            x=r["years"],
+            y=r["p90"],
+            name="10% Best Case",
+            line=dict(dash="dash")
+        ))
 
-        st.plotly_chart(fig,use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
