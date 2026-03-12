@@ -437,8 +437,8 @@ if st.button("Build Plan"):
         st.subheader("Correlation matrix")
 
         # initialize correlation matrix once
-if "corr_override" not in st.session_state:
-    st.session_state["corr_override"] = build_corr(assets)
+    if "corr_override" not in st.session_state:
+        st.session_state["corr_override"] = build_corr(assets)
 
     corr = st.session_state["corr_override"]
 
