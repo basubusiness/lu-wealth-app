@@ -245,28 +245,40 @@ if st.button("Build Plan"):
         use_container_width=True
     )
 
+    # ---------------------------------------------------
+    # INSIGHT CARDS (FIXED)
+    # ---------------------------------------------------
+
     c1,c2,c3,c4 = st.columns(4)
 
-    c1.metric(
-        f"€{median[-1]:,.0f}",
-        f"Projected wealth after {years} years"
-    )
-
-    c2.metric(
-        f"{port_r*100:.1f}%",
-        "Average yearly growth"
-    )
-
-    c3.metric(
-        f"{port_v*100:.1f}%",
-        "Year-to-year ups and downs"
-    )
-
-    if tipping:
-        c4.metric(
-            f"Year {tipping} of {years}",
-            "When investment growth overtakes your savings"
+    with c1:
+        st.metric(
+            label=f"Projected wealth after {years} years",
+            value=f"€{median[-1]:,.0f}"
         )
+
+    with c2:
+        st.metric(
+            label="Average yearly growth",
+            value=f"{port_r*100:.1f}%"
+        )
+
+    with c3:
+        st.metric(
+            label="Year-to-year ups and downs",
+            value=f"{port_v*100:.1f}%"
+        )
+
+    with c4:
+        if tipping:
+            st.metric(
+                label="When investment growth overtakes your savings",
+                value=f"Year {tipping} of {years}"
+            )
+
+    # ---------------------------------------------------
+    # CHART WITH TOOLBAR RESTORED
+    # ---------------------------------------------------
 
     st.subheader("Wealth Growth")
 
@@ -278,7 +290,27 @@ if st.button("Build Plan"):
 
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(x=years_axis,y=median,name="Portfolio Value"))
-    fig.add_trace(go.Scatter(x=years_axis,y=invested,name="Total Invested"))
+    fig.add_trace(go.Scatter(
+        x=years_axis,
+        y=median,
+        name="Portfolio Value"
+    ))
 
-    st.plotly_chart(fig,use_container_width=True)
+    fig.add_trace(go.Scatter(
+        x=years_axis,
+        y=invested,
+        name="Total Invested"
+    ))
+
+    fig.update_layout(
+        xaxis_title="Years",
+        yaxis_title="Portfolio Value (€)"
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "displaylogo": False
+        }
+    )
