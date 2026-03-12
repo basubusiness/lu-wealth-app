@@ -250,6 +250,9 @@ if st.button("Build Plan"):
     worst,median,best = scenario_paths(paths,confidence)
 
     years_axis = list(range(len(median)))
+    
+    total_invested = initial + sum(monthly*12*((1+growth)**(t-1)) for t in range(1,years+1))
+    growth_value = median[-1] - total_invested
 
     monthly_growth = median*(port_r/12)
 
