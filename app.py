@@ -2,296 +2,135 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
+from scipy.stats import norm
 import plotly.graph_objects as go
 
+# --- 1. CONFIG & STATE ---
 st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 
-# ---------------------------------------------------
-# ASSUMPTION REGISTRY
-# ---------------------------------------------------
+# Initialize session state keys to prevent "AttributeError"
+if 'results' not in st.session_state:
+    st.session_state.results = None
 
-MODEL_VERSION = "1.2"
-
-ASSUMPTIONS = {
-
-"optimizer": {
-"return_shrinkage": 0.4,
-"diversification_penalty": 0.05
-},
-
-"simulation": {
-"paths": 2000
+# --- 2. DATASET ---
+default_market_data = {
+    "Global Core": {"World Equity": [8.5, 15.0], "All-World": [8.2, 16.5], "World Small Cap": [9.0, 19.0]},
+    "Regional Equity": {"US (S&P 500)": [10.5, 17.0], "Europe 600": [7.2, 16.0], "Emerging Mkts": [8.0, 21.0]},
+    "Sectors": {"AI & Tech": [12.5, 24.0], "Global Energy": [7.5, 19.0], "Healthcare": [8.0, 14.0]},
+    "Bonds & Cash": {"Euro Gov Bonds": [3.2, 5.0], "Corp Bonds": [4.5, 7.5], "Cash/MM": [3.3, 0.8]},
+    "Alts & REITs": {"Global REITs": [7.5, 18.0], "Gold": [8.0, 14.0], "Crypto": [25.0, 68.0]}
 }
 
-}
-
-# ---------------------------------------------------
-# ASSET UNIVERSE
-# ---------------------------------------------------
-
-ASSETS = {
-
-"World Equity": {"return":0.075,"vol":0.16,"cat":"Equity"},
-"US Equity": {"return":0.078,"vol":0.17,"cat":"Equity"},
-"Emerging Markets": {"return":0.08,"vol":0.22,"cat":"Equity"},
-"Global REIT": {"return":0.065,"vol":0.18,"cat":"Equity"},
-"Euro Gov Bonds": {"return":0.03,"vol":0.06,"cat":"Bond"},
-"Corp Bonds": {"return":0.035,"vol":0.07,"cat":"Bond"},
-"Gold": {"return":0.04,"vol":0.15,"cat":"Commodity"},
-"Cash": {"return":0.02,"vol":0.01,"cat":"Cash"}
-
-}
-
-CORR_RULES = {
-
-("Equity","Equity"):0.85,
-("Equity","Bond"):0.2,
-("Equity","Commodity"):0.05,
-("Bond","Bond"):0.6,
-("Bond","Commodity"):0.1,
-("Commodity","Commodity"):0.5,
-("Cash","Equity"):0.05,
-("Cash","Bond"):0.2,
-("Cash","Commodity"):0.05,
-("Cash","Cash"):1.0
-
-}
-
-# ---------------------------------------------------
-# CORRELATION MATRIX
-# ---------------------------------------------------
-
-def build_corr(selected):
-
-    mat = pd.DataFrame(index=selected,columns=selected)
-
-    for a in selected:
-        for b in selected:
-
-            ca = ASSETS[a]["cat"]
-            cb = ASSETS[b]["cat"]
-
-            if a == b:
-                mat.loc[a,b] = 1
-            else:
-                key = (ca,cb)
-
-                if key not in CORR_RULES:
-                    key = (cb,ca)
-
-                mat.loc[a,b] = CORR_RULES[key]
-
-    return mat.astype(float)
-
-# ---------------------------------------------------
-# PORTFOLIO OPTIMIZER
-# ---------------------------------------------------
-
-def optimize_portfolio(names,target_return):
-
-    rets = np.array([ASSETS[a]["return"] for a in names])
-    vols = np.array([ASSETS[a]["vol"] for a in names])
-
-    shrink = ASSUMPTIONS["optimizer"]["return_shrinkage"]
-    rets = shrink*rets + (1-shrink)*np.mean(rets)
-
-    max_possible = max(rets)
-
-    if target_return > max_possible:
-        raise ValueError(
-            f"Target return too high. Max achievable ≈ {max_possible*100:.1f}%"
-        )
-
-    corr = build_corr(names)
-    cov = np.diag(vols) @ corr.values @ np.diag(vols)
-
-    div_penalty = ASSUMPTIONS["optimizer"]["diversification_penalty"]
-
-    def objective(w):
-
-        vol = np.sqrt(w.T @ cov @ w)
-
-        concentration = np.sum(w**2)
-
-        return vol + div_penalty * concentration
-
-    constraints = [
-
-        {"type":"eq","fun":lambda w: np.sum(w)-1},
-        {"type":"ineq","fun":lambda w: w@rets - target_return}
-
-    ]
-
-    bounds = [(0,1)]*len(names)
-
-    res = minimize(
-        objective,
-        np.ones(len(names))/len(names),
-        bounds=bounds,
-        constraints=constraints
-    )
-
-    if not res.success:
-        raise ValueError("Target return not achievable with selected assets")
-
-    w = res.x
-
-    port_r = w @ rets
-    port_v = np.sqrt(w.T @ cov @ w)
-
-    return w,port_r,port_v
-
-# ---------------------------------------------------
-# MONTE CARLO SIMULATION
-# ---------------------------------------------------
-
-def simulate(mu,sigma,years,start,monthly,growth):
-
-    sims = ASSUMPTIONS["simulation"]["paths"]
-
-    paths = np.zeros((sims,years+1))
-    paths[:,0] = start
-
-    for s in range(sims):
-
-        wealth = start
-
-        for t in range(1,years+1):
-
-            r = np.random.normal(mu,sigma)
-
-            contrib = monthly*12*((1+growth)**(t-1))
-
-            wealth = wealth*(1+r) + contrib
-
-            paths[s,t] = wealth
-
-    return paths
-
-# ---------------------------------------------------
-# INSIGHT ENGINE
-# ---------------------------------------------------
-
-def compute_insights(paths,return_rate,monthly):
-
-    median = np.median(paths,axis=0)
-
-    monthly_growth = median*(return_rate/12)
-
-    tipping = None
-
-    for i,g in enumerate(monthly_growth):
-
-        if g >= monthly:
-            tipping = i
-            break
-
-    return median,monthly_growth,tipping
-
-# ---------------------------------------------------
-# VALIDATION
-# ---------------------------------------------------
-
-def validate_engine(weights,volatility,paths):
-
-    if abs(sum(weights)-1) > 1e-6:
-        raise ValueError("Weights invalid")
-
-    if volatility <= 0:
-        raise ValueError("Volatility invalid")
-
-    returns = paths[:,1:] / paths[:,:-1] - 1
-
-    if (returns < -1).any():
-        raise ValueError("Impossible return generated")
-
-# ---------------------------------------------------
-# UI
-# ---------------------------------------------------
-
-st.title("LU Wealth Architect")
-
-selected = st.multiselect(
-"Select Assets",
-list(ASSETS.keys()),
-default=list(ASSETS.keys())[:5]
-)
-
-target_return_pct = st.number_input(
-"Target Return %",
-min_value=3.0,
-max_value=10.0,
-value=6.5,
-step=0.1
-)
-
-target_return = target_return_pct / 100
-
-initial = st.number_input("Initial Capital €",10000,5000000,100000)
-
-monthly = st.number_input("Monthly Investment €",0,20000,3000)
-
-growth = st.slider("Contribution Growth %",0,10,3)/100
-
-years = st.slider("Horizon (years)",1,40,20)
-
-# ---------------------------------------------------
-# RUN MODEL
-# ---------------------------------------------------
-
-if st.button("Build Plan"):
-
-    try:
-
-        w,port_r,port_v = optimize_portfolio(selected,target_return)
-
-        paths = simulate(port_r,port_v,years,initial,monthly,growth)
-
-        validate_engine(w,port_v,paths)
-
-        median,monthly_growth,tipping = compute_insights(paths,port_r,monthly)
-
-    except Exception as e:
-
-        st.error(str(e))
-        st.stop()
-
-    st.header("Investment Plan")
-
-    df = pd.DataFrame({
-
-    "Asset":selected,
-    "Weight":w,
-    "Invest Today €":w*initial,
-    "Monthly €":w*monthly
-
-    })
-
-    st.dataframe(df.style.format({
-
-    "Weight":"{:.1%}",
-    "Invest Today €":"€{:,.0f}",
-    "Monthly €":"€{:,.0f}"
-
-    }))
-
-    st.metric("Expected Wealth",f"€{median[-1]:,.0f}")
-
-    st.write(f"Portfolio Return: {port_r*100:.2f}%")
-    st.write(f"Portfolio Volatility: {port_v*100:.2f}%")
-
-    if tipping:
-        st.success(f"Compounding overtakes saving around year {tipping}")
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Scatter(y=monthly_growth,name="Monthly Growth"))
-    fig.add_trace(go.Scatter(y=[monthly]*len(monthly_growth),name="Monthly Saving"))
-
-    st.plotly_chart(fig,use_container_width=True)
-
-    fig2 = go.Figure()
-
-    fig2.add_trace(go.Scatter(y=median,name="Median Wealth"))
-
-    st.plotly_chart(fig2,use_container_width=True)
+all_names = [a for cat in default_market_data.values() for a in cat.keys()]
+
+if 'corr_matrix' not in st.session_state:
+    df = pd.DataFrame(0.3, index=all_names, columns=all_names)
+    for a in all_names: df.loc[a, a] = 1.0
+    eq = ["World Equity", "All-World", "World Small Cap", "US (S&P 500)", "Europe 600", "Emerging Mkts", "AI & Tech", "Healthcare"]
+    for a in eq:
+        for b in eq: 
+            if a != b: df.loc[a, b] = 0.85
+    st.session_state.corr_matrix = df
+
+# --- 3. SIDEBAR ---
+st.sidebar.header("📂 JustETF Market Hub")
+risk_profile = st.sidebar.select_slider("Risk Profile", ["Conservative", "Balanced", "Aggressive"], "Balanced")
+risk_caps = {"Conservative": 0.25, "Balanced": 0.50, "Aggressive": 0.90}
+
+f_rets, f_vols, f_names = [], [], []
+for cat, assets in default_market_data.items():
+    with st.sidebar.expander(cat, expanded=(cat == "Global Core")):
+        for asset, params in assets.items():
+            c1, c2, c3 = st.columns([2, 1, 1])
+            with c1: active = st.checkbox(asset, key=f"chk_{asset}", value=True)
+            with c2: u_ret = st.number_input("R", 0.0, 100.0, float(params[0]), key=f"ret_{asset}", label_visibility="collapsed")
+            with c3: u_vol = st.number_input("V", 0.1, 100.0, float(params[1]), key=f"vol_{asset}", label_visibility="collapsed")
+            if active: f_rets.append(u_ret/100); f_vols.append(u_vol/100); f_names.append(asset)
+
+# --- 4. INPUTS ---
+st.title(f"🇱🇺 {risk_profile} Architect")
+mode = st.radio("Choose Strategy Engine:", ["Original (Static Monthly)", "V2 (Annual Step-Up)"], horizontal=True)
+
+c1, c2 = st.columns(2)
+with c1:
+    target_ret = st.number_input("Target Return %", 1.0, 25.0, 8.5) / 100
+    current_val = st.number_input("Initial Capital (€)", value=100000)
+    step_up = st.slider("Annual Contribution Increase %", 0, 15, 3) / 100 if mode == "V2 (Annual Step-Up)" else 0.0
+with c2:
+    monthly_add = st.number_input("Monthly Savings (€)", value=3000)
+    horizon = st.slider("Horizon (Years)", 1, 40, 20)
+    inflation = st.number_input("Inflation %", value=1.8) / 100
+    adj_inflation = st.checkbox("Show Chart in Today's Euros", value=False)
+conf_level = st.select_slider("Stress Confidence", [0.90, 0.95, 0.99], 0.95)
+
+# --- 5. ENGINE ---
+if st.button("🚀 Calculate Strategy"):
+    n = len(f_rets)
+    if n > 0 and target_ret <= max(f_rets):
+        active_corr = st.session_state.corr_matrix.loc[f_names, f_names].values
+        vol_diag = np.diag(f_vols)
+        cov = vol_diag @ active_corr @ vol_diag
+        
+        def obj(w): return np.sqrt(np.dot(w.T, np.dot(cov, w)))
+        cons = [{'type': 'eq', 'fun': lambda w: np.sum(w)-1}, {'type': 'ineq', 'fun': lambda w: np.sum(w*f_rets)-target_ret}]
+        res = minimize(obj, [1/n]*n, bounds=[(0, risk_caps[risk_profile])]*n, constraints=cons)
+        
+        if res.success:
+            r_an, v_an = np.sum(res.x*f_rets), np.sqrt(np.dot(res.x.T, np.dot(cov, res.x)))
+            # Fixed Risk Contribution Logic
+            risk_cont = (res.x * (cov @ res.x)) / (v_an**2) if v_an > 0 else res.x
+            
+            y, wth, inv = np.arange(0, horizon+1), [current_val], [current_val]
+            for t in range(1, horizon+1):
+                yc = (monthly_add * 12) * ((1 + step_up)**(t-1))
+                wth.append((wth[-1]*(1+r_an)) + yc); inv.append(inv[-1] + yc)
+            
+            if adj_inflation:
+                wth = [w/((1+inflation)**i) for i, w in enumerate(wth)]
+                inv = [v/((1+inflation)**i) for i, v in enumerate(inv)]
+
+            st.session_state.results = {
+                "w": res.x, "ret": r_an, "vol": v_an, "wth": wth, "inv": inv, 
+                "y": y, "names": f_names, "risk_c": risk_cont, "current_val": current_val
+            }
+
+# --- 6. OUTPUT ---
+if st.session_state.results:
+    res = st.session_state.results
+    tabs = st.tabs(["📊 Portfolio", "📈 Wealth Path", "🔔 Risk", "⚖️ Rebalance", "🧪 Advanced Risk", "⚙️ Engine Room"])
+    
+    with tabs[0]:
+        st.write("### Strategy Overview")
+        st.metric("Final Wealth", f"€{res['wth'][-1]:,.0f}")
+        df_mix = pd.DataFrame({"Asset": res["names"], "Target %": res["w"]})
+        st.table(df_mix[df_mix["Target %"] > 0.005].style.format({"Target %": "{:.1%}"}))
+
+    with tabs[2]: # Risk Tab
+        st.write("### Volatility Analysis")
+        mu, sigma = res["ret"], res["vol"]
+        x = np.linspace(mu-4*sigma, mu+4*sigma, 100)
+        fig_r = go.Figure(go.Scatter(x=x, y=norm.pdf(x, mu, sigma), fill='tozeroy', name="Prob. Density"))
+        st.plotly_chart(fig_r, use_container_width=True)
+
+    with tabs[3]: # Rebalance Tab
+        st.write("### Portfolio Alignment")
+        total_act = 0; act_vals = []
+        for n, w in zip(res["names"], res["w"]):
+            if w > 0.005:
+                v = st.number_input(f"Current {n} (€)", value=float(w*res["current_val"]), key=f"reb_{n}")
+                act_vals.append(v); total_act += v
+        if st.button("Generate Rebalance Plan"):
+            active_names = [n for n, w in zip(res["names"], res["w"]) if w > 0.005]
+            active_weights = [w for w in res["w"] if w > 0.005]
+            reb_df = pd.DataFrame({"Asset": active_names, "Actual": act_vals, "Target %": active_weights})
+            reb_df["Action"] = (reb_df["Target %"] * total_act) - reb_df["Actual"]
+            st.table(reb_df.style.format({"Actual": "€{:,.0f}", "Target %": "{:.1%}", "Action": "€{:,.0f}"}))
+
+    with tabs[4]: # Advanced Risk
+        st.subheader("Risk Contribution Waterfall")
+        risk_df = pd.DataFrame({"Asset": res["names"], "RC": res["risk_c"]})
+        fig_w = go.Figure(go.Waterfall(x=risk_df["Asset"], y=risk_df["RC"]*100, measure=["relative"]*len(risk_df)))
+        st.plotly_chart(fig_w, use_container_width=True)
+
+    with tabs[5]: # Engine Room
+        st.data_editor(st.session_state.corr_matrix.loc[res["names"], res["names"]])
