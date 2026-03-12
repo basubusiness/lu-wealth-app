@@ -112,10 +112,15 @@ def optimize_portfolio(names,target):
 
     max_possible = max(original_returns)
 
-    if target > max_possible:
-        raise ValueError(
-        f"Target return too high. Max achievable ≈ {max_possible*100:.1f}%"
-        )
+if target > max_possible:
+
+    st.warning(
+        f"Target return too high given diversification rules. "
+        f"Maximum achievable return ≈ {max_possible*100:.1f}%. "
+        f"Portfolio optimized at this level instead."
+    )
+
+    target = max_possible
 
     corr = build_corr(names)
     cov = np.diag(vols) @ corr.values @ np.diag(vols)
