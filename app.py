@@ -122,30 +122,14 @@ def optimize_portfolio(names,target):
 
         target = max_possible
 
-    if "corr_override" in st.session_state:
-        corr = np.array(st.session_state["corr_override"])
-    else:
-        corr = build_corr(names).values
-
+    corr = build_corr(names).values
     cov = np.diag(vols) @ corr @ np.diag(vols)
 
     max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
 
-    equity_idx = [i for i,a in enumerate(names) if ASSETS[a]["cat"]=="Equity"]
-    bond_idx = [i for i,a in enumerate(names) if ASSETS[a]["cat"]=="Bond"]
-    real_idx = [i for i,a in enumerate(names) if ASSETS[a]["cat"]=="Real"]
-
     constraints = [
         {"type":"eq","fun":lambda w: np.sum(w)-1},
-        {"type":"ineq","fun":lambda w: w@rets-target},
-
-        {"type":"ineq","fun":lambda w: np.sum(w[equity_idx]) - 0.4},
-        {"type":"ineq","fun":lambda w: 0.8 - np.sum(w[equity_idx])},
-
-        {"type":"ineq","fun":lambda w: np.sum(w[bond_idx]) - 0.1},
-        {"type":"ineq","fun":lambda w: 0.5 - np.sum(w[bond_idx])},
-
-        {"type":"ineq","fun":lambda w: np.sum(w[real_idx]) - 0.05}
+        {"type":"ineq","fun":lambda w: w@rets-target}
     ]
 
     bounds = [(0,max_w)]*len(names)
@@ -167,6 +151,7 @@ def optimize_portfolio(names,target):
     port_v = np.sqrt(w.T@cov@w)
 
     return w,port_r,port_v
+
 
 # ---------------------------------------------------
 # MONTE CARLO
@@ -192,9 +177,6 @@ def simulate(mu,sigma,years,start,monthly,growth):
 
     return paths
 
-# ---------------------------------------------------
-# SCENARIOS
-# ---------------------------------------------------
 
 def scenario_paths(paths,confidence):
 
@@ -206,6 +188,7 @@ def scenario_paths(paths,confidence):
     best = np.percentile(paths,upper*100,axis=0)
 
     return worst,median,best
+
 
 # ---------------------------------------------------
 # INPUTS
@@ -241,11 +224,6 @@ list(ASSETS.keys()),
 default=list(ASSETS.keys())[:5]
 )
 
-# reset correlation override if asset universe changes
-if "corr_override" in st.session_state:
-    if st.session_state["corr_override"].shape[0] != len(assets):
-        del st.session_state["corr_override"]
-
 # ---------------------------------------------------
 # RUN MODEL
 # ---------------------------------------------------
@@ -265,7 +243,6 @@ if st.button("Build Plan"):
         total_invested += monthly * 12 * ((1 + growth) ** (t-1))
 
     growth_value = median[-1] - total_invested
-
     monthly_income = median[-1] * port_r / 12
 
     monthly_growth = median*(port_r/12)
@@ -302,149 +279,50 @@ if st.button("Build Plan"):
         c1,c2,c3,c4,c5 = st.columns(5)
 
         with c1:
-            st.markdown(f"""
-            <div class="card">
-            <div class="card-value">€{median[-1]:,.0f}</div>
-            <div class="card-label">Projected portfolio value after {years} years</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="card"><div class="card-value">€{median[-1]:,.0f}</div>'
+                f'<div class="card-label">Projected portfolio value after {years} years</div></div>',
+                unsafe_allow_html=True
+            )
 
         with c2:
-            st.markdown(f"""
-            <div class="card">
-            <div class="card-value">{port_r*100:.1f}%</div>
-            <div class="card-label">Typical yearly growth rate</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="card"><div class="card-value">{port_r*100:.1f}%</div>'
+                f'<div class="card-label">Typical yearly growth rate</div></div>',
+                unsafe_allow_html=True
+            )
 
         with c3:
-            st.markdown(f"""
-            <div class="card">
-            <div class="card-value">€{growth_value:,.0f}</div>
-            <div class="card-label">
-            Investment growth on top of €{total_invested:,.0f} contributed
-            </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="card"><div class="card-value">€{growth_value:,.0f}</div>'
+                f'<div class="card-label">Investment growth on top of €{total_invested:,.0f} contributed</div></div>',
+                unsafe_allow_html=True
+            )
 
         with c4:
             if tipping:
                 income_at_tipping = median[tipping] * port_r / 12
 
-                st.markdown(f"""
-                <div class="card">
-                <div class="card-value">Year {tipping}</div>
-                <div class="card-label">
-                Growth beats saving (~€{income_at_tipping:,.0f}/month)
-                </div>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="card"><div class="card-value">Year {tipping}</div>'
+                    f'<div class="card-label">Growth beats saving (~€{income_at_tipping:,.0f}/month)</div></div>',
+                    unsafe_allow_html=True
+                )
 
         with c5:
-            st.markdown(f"""
-            <div class="card">
-            <div class="card-value">€{monthly_income:,.0f}</div>
-            <div class="card-label">
-            Estimated monthly income after {years} years
-            </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="card"><div class="card-value">€{monthly_income:,.0f}</div>'
+                f'<div class="card-label">Estimated monthly income after {years} years</div></div>',
+                unsafe_allow_html=True
+            )
 
-    # PROJECTION
+    # PROJECTION TAB
     with tab2:
 
         fig = go.Figure()
 
-        fig.add_trace(go.Scatter(x=years_axis,y=best,name="Best case",line=dict(color="green")))
-        fig.add_trace(go.Scatter(x=years_axis,y=median,name="Expected",line=dict(color="blue",width=3)))
-        fig.add_trace(go.Scatter(x=years_axis,y=worst,name="Worst case",line=dict(color="red")))
+        fig.add_trace(go.Scatter(x=years_axis,y=best,name="Best case"))
+        fig.add_trace(go.Scatter(x=years_axis,y=median,name="Expected"))
+        fig.add_trace(go.Scatter(x=years_axis,y=worst,name="Worst case"))
 
-        invested = [initial + monthly*12*i for i in years_axis]
-
-        fig.add_trace(go.Scatter(
-        x=years_axis,
-        y=invested,
-        name="Total invested",
-        line=dict(color="grey",dash="dot")
-        ))
-
-        fig.add_annotation(x=years_axis[-1],y=best[-1],text=f"€{best[-1]:,.0f}",showarrow=False)
-        fig.add_annotation(x=years_axis[-1],y=median[-1],text=f"€{median[-1]:,.0f}",showarrow=False)
-        fig.add_annotation(x=years_axis[-1],y=worst[-1],text=f"€{worst[-1]:,.0f}",showarrow=False)
-
-        if tipping:
-            fig.add_vline(
-            x=tipping,
-            line_dash="dash",
-            line_color="green",
-            annotation_text="Compounding overtakes saving"
-            )
-
-        st.plotly_chart(fig,use_container_width=True,config={"displaylogo":False})
-
-    # RISK
-    with tab3:
-
-        fig = go.Figure()
-
-        fig.add_histogram(
-        x=paths[:,-1],
-        nbinsx=40
-        )
-
-        fig.update_layout(
-        title="Distribution of possible final wealth outcomes"
-        )
-
-        st.plotly_chart(fig)
-
-    # REBALANCE
-    with tab4:
-
-        st.subheader("Rebalancing calculator")
-
-        current = {}
-
-        for asset in plan["Asset"]:
-            current[asset] = st.number_input(
-            f"Current value {asset}",
-            value=float(plan.loc[plan["Asset"]==asset,"Invest Now"])
-            )
-
-        total_current = sum(current.values())
-
-        target_values = plan["Weight"]*total_current
-
-        rebalance = target_values - list(current.values())
-
-        rebalance_df = pd.DataFrame({
-        "Asset":plan["Asset"],
-        "Target €":target_values,
-        "Current €":list(current.values()),
-        "Buy / Sell €":rebalance
-        })
-
-        st.dataframe(rebalance_df)
-
-    # ENGINE
-    with tab5:
-
-        st.subheader("Model assumptions")
-
-        df = pd.DataFrame(ASSETS).T
-        st.dataframe(df)
-
-        st.subheader("Correlation matrix")
-
-        if "corr_override" in st.session_state:
-            corr = pd.DataFrame(
-                st.session_state["corr_override"],
-                index=assets,
-                columns=assets
-            )
-        else:
-            corr = build_corr(assets)
-
-        edited_corr = st.data_editor(corr)
-
-        st.session_state["corr_override"] = edited_corr.values
+        st.plotly_chart(fig,use_container_width=True)
