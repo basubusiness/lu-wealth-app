@@ -246,7 +246,6 @@ if "corr_override" in st.session_state:
     if st.session_state["corr_override"].shape[0] != len(assets):
         del st.session_state["corr_override"]
 
-
 # ---------------------------------------------------
 # RUN MODEL
 # ---------------------------------------------------
@@ -260,19 +259,13 @@ if st.button("Build Plan"):
     worst,median,best = scenario_paths(paths,confidence)
 
     years_axis = list(range(len(median)))
-    
-    # ---------------------------------------------------
-    # PORTFOLIO INSIGHTS
-    # ---------------------------------------------------
 
-    # total principal invested
     total_invested = initial
     for t in range(1, years + 1):
         total_invested += monthly * 12 * ((1 + growth) ** (t-1))
 
     growth_value = median[-1] - total_invested
 
-    # monthly income estimate
     monthly_income = median[-1] * port_r / 12
 
     monthly_growth = median*(port_r/12)
@@ -294,10 +287,7 @@ if st.button("Build Plan"):
 
     tab1,tab2,tab3,tab4,tab5 = st.tabs(["Plan","Projection","Risk","Rebalance","Engine"])
 
-# ---------------------------------------------------
-# PLAN
-# ---------------------------------------------------
-
+    # PLAN TAB
     with tab1:
 
         st.dataframe(
@@ -340,7 +330,7 @@ if st.button("Build Plan"):
         with c4:
             if tipping:
                 income_at_tipping = median[tipping] * port_r / 12
-        
+
                 st.markdown(f"""
                 <div class="card">
                 <div class="card-value">Year {tipping}</div>
@@ -349,7 +339,7 @@ if st.button("Build Plan"):
                 </div>
                 </div>
                 """, unsafe_allow_html=True)
-                
+
         with c5:
             st.markdown(f"""
             <div class="card">
@@ -359,12 +349,8 @@ if st.button("Build Plan"):
             </div>
             </div>
             """, unsafe_allow_html=True)
-        
-        
-# ---------------------------------------------------
-# PROJECTION
-# ---------------------------------------------------
 
+    # PROJECTION
     with tab2:
 
         fig = go.Figure()
@@ -396,10 +382,7 @@ if st.button("Build Plan"):
 
         st.plotly_chart(fig,use_container_width=True,config={"displaylogo":False})
 
-# ---------------------------------------------------
-# RISK
-# ---------------------------------------------------
-
+    # RISK
     with tab3:
 
         fig = go.Figure()
@@ -415,10 +398,7 @@ if st.button("Build Plan"):
 
         st.plotly_chart(fig)
 
-# ---------------------------------------------------
-# REBALANCE
-# ---------------------------------------------------
-
+    # REBALANCE
     with tab4:
 
         st.subheader("Rebalancing calculator")
@@ -446,10 +426,7 @@ if st.button("Build Plan"):
 
         st.dataframe(rebalance_df)
 
-# ---------------------------------------------------
-# ENGINE
-# ---------------------------------------------------
-
+    # ENGINE
     with tab5:
 
         st.subheader("Model assumptions")
@@ -459,18 +436,15 @@ if st.button("Build Plan"):
 
         st.subheader("Correlation matrix")
 
-        # load existing matrix if present
         if "corr_override" in st.session_state:
             corr = pd.DataFrame(
                 st.session_state["corr_override"],
                 index=assets,
                 columns=assets
             )
-    else:
-        corr = build_corr(assets)
+        else:
+            corr = build_corr(assets)
 
-    edited_corr = st.data_editor(corr)
+        edited_corr = st.data_editor(corr)
 
-    # store edits
-    st.session_state["corr_override"] = edited_corr.values
-        
+        st.session_state["corr_override"] = edited_corr.values
