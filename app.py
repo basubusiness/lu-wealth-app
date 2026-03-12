@@ -241,6 +241,12 @@ list(ASSETS.keys()),
 default=list(ASSETS.keys())[:5]
 )
 
+# reset correlation override if asset universe changes
+if "corr_override" in st.session_state:
+    if st.session_state["corr_override"].shape[0] != len(assets):
+        del st.session_state["corr_override"]
+
+
 # ---------------------------------------------------
 # RUN MODEL
 # ---------------------------------------------------
@@ -453,8 +459,18 @@ if st.button("Build Plan"):
 
         st.subheader("Correlation matrix")
 
+        # load existing matrix if present
+        if "corr_override" in st.session_state:
+            corr = pd.DataFrame(
+                st.session_state["corr_override"],
+                index=assets,
+                columns=assets
+            )
+    else:
         corr = build_corr(assets)
 
-        edited_corr = st.data_editor(corr)
-        st.session_state["corr_override"] = edited_corr.values
+    edited_corr = st.data_editor(corr)
+
+    # store edits
+    st.session_state["corr_override"] = edited_corr.values
         
