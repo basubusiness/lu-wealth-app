@@ -168,7 +168,6 @@ def optimize_portfolio(names,target):
 
     return w,port_r,port_v
 
-
 # ---------------------------------------------------
 # MONTE CARLO
 # ---------------------------------------------------
@@ -193,7 +192,6 @@ def simulate(mu,sigma,years,start,monthly,growth):
 
     return paths
 
-
 # ---------------------------------------------------
 # SCENARIOS
 # ---------------------------------------------------
@@ -208,7 +206,6 @@ def scenario_paths(paths,confidence):
     best = np.percentile(paths,upper*100,axis=0)
 
     return worst,median,best
-
 
 # ---------------------------------------------------
 # INPUTS
@@ -249,7 +246,6 @@ if "corr_override" in st.session_state:
     if st.session_state["corr_override"].shape[0] != len(assets):
         del st.session_state["corr_override"]
 
-
 # ---------------------------------------------------
 # BUILD PLAN
 # ---------------------------------------------------
@@ -271,29 +267,25 @@ if st.button("Build Plan"):
     growth_value = median[-1] - total_invested
     monthly_income = median[-1] * port_r / 12
 
-    monthly_growth = median*(port_r/12)
-
-    tipping = None
-    for i,g in enumerate(monthly_growth):
-        if g >= monthly:
-            tipping = i
-            break
-
-    plan = pd.DataFrame({
-        "Asset":assets,
-        "Weight":w,
-        "Invest Now":w*initial,
-        "Monthly":w*monthly
-    })
-
-    plan = plan[plan["Weight"]>0.01]
-
     tab1,tab2,tab3,tab4,tab5 = st.tabs(["Plan","Projection","Risk","Rebalance","Engine"])
 
-    # ---------------------------------------------------
-    # ENGINE TAB
-    # ---------------------------------------------------
+    # PLAN
+    with tab1:
+        st.write("Portfolio allocation and insights here.")
 
+    # PROJECTION
+    with tab2:
+        st.write("Projection chart here.")
+
+    # RISK
+    with tab3:
+        st.write("Risk distribution here.")
+
+    # REBALANCE
+    with tab4:
+        st.write("Rebalancing tool here.")
+
+    # ENGINE
     with tab5:
 
         st.subheader("Model assumptions")
