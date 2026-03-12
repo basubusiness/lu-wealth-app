@@ -13,7 +13,7 @@ st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 ASSUMPTIONS = {
     "optimizer": {
         "return_shrinkage": 0.4,
-        "div_penalty": 0.05
+        "div_penalty": 0.02
     },
     "simulation": {
         "paths": 2000
@@ -38,7 +38,7 @@ ASSETS = {
 CORR_RULES = {
     ("Equity","Equity"):0.85,
     ("Equity","Bond"):0.2,
-    ("Equity","Commodity"):0.05,
+    ("Equity","Commodity"):0.15,
     ("Bond","Bond"):0.6,
     ("Bond","Commodity"):0.1,
     ("Commodity","Commodity"):0.5,
@@ -234,83 +234,105 @@ if st.button("Build Plan"):
 
     plan = plan[plan["Weight"]>0.01]
 
-    st.subheader("Investment Plan")
-
-    st.dataframe(
-        plan.style.format({
-            "Weight":"{:.1%}",
-            "Invest Now":"€{:,.0f}",
-            "Monthly":"€{:,.0f}"
-        }),
-        use_container_width=True
-    )
-
     # ---------------------------------------------------
-    # INSIGHT CARDS (FIXED)
+    # STEPPER TABS
     # ---------------------------------------------------
 
-    c1,c2,c3,c4 = st.columns(4)
+    tab1,tab2,tab3,tab4 = st.tabs(["Plan","Projection","Risk","Engine"])
 
-    with c1:
-        st.metric(
-            label=f"Projected wealth after {years} years",
-            value=f"€{median[-1]:,.0f}"
+    # ---------------------------------------------------
+    # PLAN TAB
+    # ---------------------------------------------------
+
+    with tab1:
+
+        st.subheader("Investment Plan")
+
+        st.dataframe(
+            plan.style.format({
+                "Weight":"{:.1%}",
+                "Invest Now":"€{:,.0f}",
+                "Monthly":"€{:,.0f}"
+            }),
+            use_container_width=True
         )
 
-    with c2:
-        st.metric(
-            label="Average yearly growth",
-            value=f"{port_r*100:.1f}%"
-        )
+        card_container = st.container()
 
-    with c3:
-        st.metric(
-            label="Year-to-year ups and downs",
-            value=f"{port_v*100:.1f}%"
-        )
+        with card_container:
 
-    with c4:
+            c1,c2,c3,c4 = st.columns(4)
+
+            with c1:
+                st.metric(
+                    label=f"Projected wealth after {years} years",
+                    value=f"€{median[-1]:,.0f}"
+                )
+
+            with c2:
+                st.metric(
+                    label="Average yearly growth",
+                    value=f"{port_r*100:.1f}%"
+                )
+
+            with c3:
+                st.metric(
+                    label="Year-to-year ups and downs",
+                    value=f"{port_v*100:.1f}%"
+                )
+
+            with c4:
+                if tipping:
+                    st.metric(
+                        label="When investment growth overtakes your savings",
+                        value=f"Year {tipping} of {years}"
+                    )
+
+    # ---------------------------------------------------
+    # PROJECTION TAB
+    # ---------------------------------------------------
+
+    with tab2:
+
+        st.subheader("Wealth Growth")
+
+        years_axis = list(range(len(median)))
+
+        invested = [
+            initial + monthly*12*i for i in years_axis
+        ]
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(
+            x=years_axis,
+            y=median,
+            name="Portfolio Value"
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=years_axis,
+            y=invested,
+            name="Total Invested"
+        ))
+
         if tipping:
-            st.metric(
-                label="When investment growth overtakes your savings",
-                value=f"Year {tipping} of {years}"
+
+            fig.add_vline(
+                x=tipping,
+                line_dash="dash",
+                line_color="green",
+                annotation_text="Compounding overtakes saving"
             )
 
-    # ---------------------------------------------------
-    # CHART WITH TOOLBAR RESTORED
-    # ---------------------------------------------------
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displaylogo": False}
+        )
 
-    st.subheader("Wealth Growth")
+    with tab3:
+        st.write("Risk analytics coming next.")
 
-    years_axis = list(range(len(median)))
-
-    invested = [
-        initial + monthly*12*i for i in years_axis
-    ]
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Scatter(
-        x=years_axis,
-        y=median,
-        name="Portfolio Value"
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=years_axis,
-        y=invested,
-        name="Total Invested"
-    ))
-
-    fig.update_layout(
-        xaxis_title="Years",
-        yaxis_title="Portfolio Value (€)"
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        config={
-            "displaylogo": False
-        }
-    )
+    with tab4:
+        st.write("Model assumptions and engine controls.")
