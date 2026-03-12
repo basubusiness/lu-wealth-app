@@ -436,15 +436,16 @@ if st.button("Build Plan"):
 
         st.subheader("Correlation matrix")
 
-        if "corr_override" in st.session_state:
-            corr = pd.DataFrame(
-                st.session_state["corr_override"],
-                index=assets,
-                columns=assets
-            )
-        else:
-            corr = build_corr(assets)
+        # initialize correlation matrix once
+if "corr_override" not in st.session_state:
+    st.session_state["corr_override"] = build_corr(assets)
 
-        edited_corr = st.data_editor(corr)
+    corr = st.session_state["corr_override"]
 
-        st.session_state["corr_override"] = edited_corr.values
+    edited_corr = st.data_editor(
+        corr,
+        key="corr_editor"
+    )
+
+    # update session matrix after edits
+    st.session_state["corr_override"] = edited_corr
