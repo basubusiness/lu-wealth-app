@@ -2,6 +2,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
+from scipy.stats import norm
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="LU Wealth Architect", layout="wide")
@@ -9,9 +10,9 @@ st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 if "results" not in st.session_state:
     st.session_state.results = None
 
-# -------------------------------
+# ---------------------------------------------------
 # DATA
-# -------------------------------
+# ---------------------------------------------------
 
 default_market_data = {
     "Global Core": {
@@ -31,19 +32,19 @@ default_market_data = {
     "Defensive": {
         "Euro Gov Bonds": [3.0, 6],
         "Corp Bonds": [3.5, 7],
-        "Cash": [2.0, 1]
+        "Cash/MM": [2.0, 1]
     }
 }
 
 assets = [a for c in default_market_data.values() for a in c]
 
-# -------------------------------
+# ---------------------------------------------------
 # CORRELATION MATRIX
-# -------------------------------
+# ---------------------------------------------------
 
 if "corr_matrix" not in st.session_state:
 
-    corr = pd.DataFrame(0.25, index=assets, columns=assets)
+    corr = pd.DataFrame(.25, index=assets, columns=assets)
 
     for a in assets:
         corr.loc[a, a] = 1
@@ -60,23 +61,19 @@ if "corr_matrix" not in st.session_state:
     for a in equities:
         for b in equities:
             if a != b:
-                corr.loc[a, b] = 0.85
+                corr.loc[a, b] = .85
 
-    corr.loc["Gold", equities] = 0.05
-    corr.loc[equities, "Gold"] = 0.05
+    corr.loc["Gold", equities] = .05
+    corr.loc[equities, "Gold"] = .05
 
-    corr.loc["Global REITs", equities] = 0.7
-    corr.loc[equities, "Global REITs"] = 0.7
+    corr.loc["Global REITs", equities] = .7
+    corr.loc[equities, "Global REITs"] = .7
 
-    corr.loc["Euro Gov Bonds", equities] = 0.2
-    corr.loc[equities, "Euro Gov Bonds"] = 0.2
+    corr.loc["Euro Gov Bonds", equities] = .2
+    corr.loc[equities, "Euro Gov Bonds"] = .2
 
     st.session_state.corr_matrix = corr
 
-
-# -------------------------------
-# CLEAN CORRELATION
-# -------------------------------
 
 def clean_corr(c):
 
@@ -91,9 +88,9 @@ def clean_corr(c):
     return pd.DataFrame(c_psd, index=c.index, columns=c.columns)
 
 
-# -------------------------------
+# ---------------------------------------------------
 # MONTE CARLO
-# -------------------------------
+# ---------------------------------------------------
 
 def monte_carlo(mu, sigma, years, start, monthly, step_up, sims=2000):
 
@@ -117,11 +114,11 @@ def monte_carlo(mu, sigma, years, start, monthly, step_up, sims=2000):
     return paths
 
 
-# -------------------------------
+# ---------------------------------------------------
 # SIDEBAR
-# -------------------------------
+# ---------------------------------------------------
 
-st.sidebar.header("Inputs")
+st.sidebar.header("Market Hub")
 
 risk_profile = st.sidebar.select_slider(
     "Risk profile",
@@ -130,6 +127,8 @@ risk_profile = st.sidebar.select_slider(
 )
 
 caps = {"Conservative": .25, "Balanced": .45, "Aggressive": .8}
+
+crisis_mode = st.sidebar.checkbox("Crisis stress")
 
 names = []
 rets = []
@@ -158,9 +157,9 @@ for cat, asset_set in default_market_data.items():
                 vols.append(v / 100)
 
 
-# -------------------------------
+# ---------------------------------------------------
 # MAIN INPUTS
-# -------------------------------
+# ---------------------------------------------------
 
 st.title("🇱🇺 Wealth Architect")
 
@@ -176,9 +175,9 @@ with c2:
     years = st.slider("Horizon", 1, 40, 20)
 
 
-# -------------------------------
-# CALCULATE
-# -------------------------------
+# ---------------------------------------------------
+# OPTIMIZATION
+# ---------------------------------------------------
 
 if st.button("Create Investment Plan"):
 
@@ -189,7 +188,13 @@ if st.button("Create Investment Plan"):
     shrink = .4
     rets = shrink * rets + (1 - shrink) * avg
 
-    corr = clean_corr(st.session_state.corr_matrix.loc[names, names])
+    corr = st.session_state.corr_matrix.loc[names, names]
+
+    if crisis_mode:
+        eq_mask = corr.index.str.contains("Equity|World|S&P|Europe|Emerging")
+        corr.loc[eq_mask, eq_mask] = .95
+
+    corr = clean_corr(corr)
 
     cov = np.diag(vols) @ corr.values @ np.diag(vols)
 
@@ -213,12 +218,18 @@ if st.button("Create Investment Plan"):
     paths = monte_carlo(port_r, port_v, years, initial, monthly, step_up)
 
     median = np.median(paths, axis=0)
+    p10 = np.percentile(paths, 10, axis=0)
+    p90 = np.percentile(paths, 90, axis=0)
 
-    # tipping point
+    # Correct cumulative contributions
     contrib = [initial]
+    total = initial
 
     for t in range(1, years + 1):
-        contrib.append(initial + monthly * 12 * t)
+
+        yearly = monthly * 12 * ((1 + step_up) ** (t - 1))
+        total += yearly
+        contrib.append(total)
 
     tipping = None
 
@@ -227,58 +238,178 @@ if st.button("Create Investment Plan"):
             tipping = i
             break
 
+    risk_contrib = (w * (cov @ w)) / (port_v ** 2)
+
     st.session_state.results = {
-        "w": w,
+        "weights": w,
         "names": names,
         "median": median,
-        "paths": paths,
+        "p10": p10,
+        "p90": p90,
         "ret": port_r,
         "vol": port_v,
-        "tip": tipping
+        "tip": tipping,
+        "risk_contrib": risk_contrib,
+        "paths": paths,
+        "contrib": contrib
     }
 
 
-# -------------------------------
-# OUTPUT
-# -------------------------------
+# ---------------------------------------------------
+# OUTPUT TABS
+# ---------------------------------------------------
 
 if st.session_state.results:
 
     r = st.session_state.results
 
-    st.header("Your Investment Plan")
+    tabs = st.tabs([
+        "Investment Plan",
+        "Wealth Path",
+        "Risk",
+        "Rebalance",
+        "Advanced Risk",
+        "Engine Room"
+    ])
 
-    plan = pd.DataFrame({
-        "Asset": r["names"],
-        "Initial Investment €": r["w"] * initial,
-        "Monthly Investment €": r["w"] * monthly
-    })
+    # ---------------------------------------------------
+    # TAB 1 — INVESTMENT PLAN
+    # ---------------------------------------------------
 
-    st.dataframe(plan.style.format({
-        "Initial Investment €": "€{:,.0f}",
-        "Monthly Investment €": "€{:,.0f}"
-    }))
+    with tabs[0]:
 
-    st.subheader("Expected Wealth Path")
+        st.header("Your Investment Plan")
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(y=r["median"], name="Expected wealth"))
+        plan = pd.DataFrame({
+            "Asset": r["names"],
+            "Invest Today (€)": r["weights"] * initial,
+            "Monthly Investment (€)": r["weights"] * monthly
+        })
 
-    st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(plan.style.format({
+            "Invest Today (€)": "€{:,.0f}",
+            "Monthly Investment (€)": "€{:,.0f}"
+        }))
 
-    st.subheader("Insights")
+        final = r["median"][-1]
 
-    final = r["median"][-1]
+        total_contrib = r["contrib"][-1]
+        growth = final - total_contrib
 
-    st.info(f"Expected wealth after {years} years: **€{final:,.0f}**")
+        st.subheader("Insights")
 
-    if r["tip"]:
+        st.info(f"Expected wealth after {years} years: **€{final:,.0f}**")
 
-        st.success(
-            f"Compounding tipping point expected around **year {r['tip']}**, "
-            "when investment growth exceeds total contributions."
+        if r["tip"]:
+            st.success(
+                f"Compounding tipping point around **year {r['tip']}**."
+            )
+
+        st.write(f"""
+Total invested: **€{total_contrib:,.0f}**
+
+Expected wealth from market growth: **€{growth:,.0f}**
+""")
+
+        st.write(f"""
+Expected return: **{r['ret']*100:.2f}%**  
+Volatility: **{r['vol']*100:.2f}%**
+""")
+
+    # ---------------------------------------------------
+    # TAB 2 — WEALTH PATH
+    # ---------------------------------------------------
+
+    with tabs[1]:
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(y=r["median"], name="Median"))
+        fig.add_trace(go.Scatter(y=r["p10"], name="Pessimistic", line=dict(dash="dash")))
+        fig.add_trace(go.Scatter(y=r["p90"], name="Optimistic", line=dict(dash="dash")))
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ---------------------------------------------------
+    # TAB 3 — RISK
+    # ---------------------------------------------------
+
+    with tabs[2]:
+
+        mu = r["ret"]
+        sigma = r["vol"]
+
+        x = np.linspace(mu - 4 * sigma, mu + 4 * sigma, 200)
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(x=x, y=norm.pdf(x, mu, sigma), fill="tozeroy"))
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ---------------------------------------------------
+    # TAB 4 — REBALANCE
+    # ---------------------------------------------------
+
+    with tabs[3]:
+
+        total = 0
+        actual_vals = []
+
+        for n, w in zip(r["names"], r["weights"]):
+
+            val = st.number_input(
+                f"Current {n} (€)",
+                value=float(w * initial),
+                key=f"reb_{n}"
+            )
+
+            actual_vals.append(val)
+            total += val
+
+        if st.button("Generate Rebalance Plan"):
+
+            reb_df = pd.DataFrame({
+                "Asset": r["names"],
+                "Actual": actual_vals,
+                "Target %": r["weights"]
+            })
+
+            reb_df["Action"] = (reb_df["Target %"] * total) - reb_df["Actual"]
+
+            st.table(reb_df.style.format({
+                "Actual": "€{:,.0f}",
+                "Target %": "{:.1%}",
+                "Action": "€{:,.0f}"
+            }))
+
+    # ---------------------------------------------------
+    # TAB 5 — RISK CONTRIBUTION
+    # ---------------------------------------------------
+
+    with tabs[4]:
+
+        rc_df = pd.DataFrame({
+            "Asset": r["names"],
+            "Risk Contribution": r["risk_contrib"]
+        })
+
+        fig = go.Figure(go.Waterfall(
+            x=rc_df["Asset"],
+            y=rc_df["Risk Contribution"] * 100
+        ))
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ---------------------------------------------------
+    # TAB 6 — ENGINE ROOM
+    # ---------------------------------------------------
+
+    with tabs[5]:
+
+        st.write("Editable Correlation Matrix")
+
+        st.data_editor(
+            st.session_state.corr_matrix.loc[r["names"], r["names"]],
+            use_container_width=True
         )
-
-    st.write(
-        f"Expected return: **{r['ret']*100:.2f}%**  |  Volatility: **{r['vol']*100:.2f}%**"
-    )
