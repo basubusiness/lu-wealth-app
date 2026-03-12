@@ -249,9 +249,8 @@ if "corr_override" in st.session_state:
     if st.session_state["corr_override"].shape[0] != len(assets):
         del st.session_state["corr_override"]
 
-
 # ---------------------------------------------------
-# BUILD PLAN
+# RUN MODEL
 # ---------------------------------------------------
 
 if st.button("Build Plan"):
@@ -290,10 +289,70 @@ if st.button("Build Plan"):
 
     tab1,tab2,tab3,tab4,tab5 = st.tabs(["Plan","Projection","Risk","Rebalance","Engine"])
 
-    # ---------------------------------------------------
-    # ENGINE TAB
-    # ---------------------------------------------------
+    # PLAN TAB
+    with tab1:
 
+        st.dataframe(
+        plan.style.format({
+        "Weight":"{:.1%}",
+        "Invest Now":"€{:,.0f}",
+        "Monthly":"€{:,.0f}"
+        }),
+        use_container_width=True
+        )
+
+        c1,c2,c3,c4,c5 = st.columns(5)
+
+        with c1:
+            st.markdown(f"""
+            <div class="card">
+            <div class="card-value">€{median[-1]:,.0f}</div>
+            <div class="card-label">Projected portfolio value after {years} years</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c2:
+            st.markdown(f"""
+            <div class="card">
+            <div class="card-value">{port_r*100:.1f}%</div>
+            <div class="card-label">Typical yearly growth rate</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c3:
+            st.markdown(f"""
+            <div class="card">
+            <div class="card-value">€{growth_value:,.0f}</div>
+            <div class="card-label">
+            Investment growth on top of €{total_invested:,.0f} contributed
+            </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c4:
+            if tipping:
+                income_at_tipping = median[tipping] * port_r / 12
+
+                st.markdown(f"""
+                <div class="card">
+                <div class="card-value">Year {tipping}</div>
+                <div class="card-label">
+                Growth beats saving (~€{income_at_tipping:,.0f}/month)
+                </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        with c5:
+            st.markdown(f"""
+            <div class="card">
+            <div class="card-value">€{monthly_income:,.0f}</div>
+            <div class="card-label">
+            Estimated monthly income after {years} years
+            </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # ENGINE TAB
     with tab5:
 
         st.subheader("Model assumptions")
