@@ -22,7 +22,7 @@ text-align:center;
 .card-value {
 font-size:28px;
 font-weight:600;
-color:#111;
+color:#000;
 }
 .card-label {
 font-size:14px;
