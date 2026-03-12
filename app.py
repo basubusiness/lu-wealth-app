@@ -5,18 +5,18 @@ from scipy.optimize import minimize
 from scipy.stats import norm
 import plotly.graph_objects as go
 
-# -------------------------------------------------------
-# CONFIG
-# -------------------------------------------------------
+# ---------------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------------
 
 st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 
 if "results" not in st.session_state:
     st.session_state.results = None
 
-# -------------------------------------------------------
+# ---------------------------------------------------------
 # DATASET
-# -------------------------------------------------------
+# ---------------------------------------------------------
 
 default_market_data = {
     "Global Core": {
@@ -42,9 +42,9 @@ default_market_data = {
 
 all_assets = [a for cat in default_market_data.values() for a in cat]
 
-# -------------------------------------------------------
+# ---------------------------------------------------------
 # CORRELATION MATRIX
-# -------------------------------------------------------
+# ---------------------------------------------------------
 
 if "corr_matrix" not in st.session_state:
 
@@ -78,9 +78,9 @@ if "corr_matrix" not in st.session_state:
 
     st.session_state.corr_matrix = corr
 
-# -------------------------------------------------------
+# ---------------------------------------------------------
 # CORR MATRIX CLEANER
-# -------------------------------------------------------
+# ---------------------------------------------------------
 
 def clean_corr_matrix(corr):
 
@@ -88,16 +88,15 @@ def clean_corr_matrix(corr):
     np.fill_diagonal(corr.values, 1)
 
     eigvals, eigvecs = np.linalg.eigh(corr)
-
     eigvals[eigvals < 0] = 0
 
     corr_psd = eigvecs @ np.diag(eigvals) @ eigvecs.T
 
     return pd.DataFrame(corr_psd, index=corr.index, columns=corr.columns)
 
-# -------------------------------------------------------
+# ---------------------------------------------------------
 # MONTE CARLO
-# -------------------------------------------------------
+# ---------------------------------------------------------
 
 def monte_carlo_paths(mu, sigma, years, start, contrib, step_up, sims=2000):
 
@@ -120,9 +119,9 @@ def monte_carlo_paths(mu, sigma, years, start, contrib, step_up, sims=2000):
 
     return paths
 
-# -------------------------------------------------------
+# ---------------------------------------------------------
 # SIDEBAR
-# -------------------------------------------------------
+# ---------------------------------------------------------
 
 st.sidebar.header("📂 Market Hub")
 
@@ -140,9 +139,9 @@ risk_caps = {
 
 crisis_mode = st.sidebar.checkbox("Stress Crisis Correlations")
 
-# -------------------------------------------------------
+# ---------------------------------------------------------
 # ASSET INPUT
-# -------------------------------------------------------
+# ---------------------------------------------------------
 
 selected_names = []
 rets = []
@@ -180,9 +179,9 @@ for cat, assets in default_market_data.items():
                 rets.append(r / 100)
                 vols.append(v / 100)
 
-# -------------------------------------------------------
+# ---------------------------------------------------------
 # INPUTS
-# -------------------------------------------------------
+# ---------------------------------------------------------
 
 st.title("🇱🇺 Wealth Architect")
 
@@ -200,15 +199,11 @@ with c2:
     horizon = st.slider("Horizon (Years)", 1, 40, 20)
     inflation = st.number_input("Inflation %", value=2.0) / 100
 
-# -------------------------------------------------------
+# ---------------------------------------------------------
 # CALCULATE
-# -------------------------------------------------------
+# ---------------------------------------------------------
 
 if st.button("🚀 Calculate Strategy"):
-
-    if len(rets) == 0:
-        st.error("Select at least one asset.")
-        st.stop()
 
     rets = np.array(rets)
     vols = np.array(vols)
@@ -219,7 +214,7 @@ if st.button("🚀 Calculate Strategy"):
     shrunk_rets = shrink * rets + (1 - shrink) * avg_ret
 
     if target_return > max(shrunk_rets):
-        st.error("Target return higher than any available asset.")
+        st.error("Target return higher than available assets.")
         st.stop()
 
     corr = st.session_state.corr_matrix.loc[selected_names, selected_names]
@@ -247,10 +242,6 @@ if st.button("🚀 Calculate Strategy"):
     bounds = [(0, risk_caps[risk_profile])] * n
 
     res = minimize(obj, np.ones(n) / n, bounds=bounds, constraints=cons)
-
-    if not res.success:
-        st.error("Optimizer could not find a feasible portfolio.")
-        st.stop()
 
     weights = res.x
 
@@ -282,12 +273,12 @@ if st.button("🚀 Calculate Strategy"):
         "median": median,
         "p10": p10,
         "p90": p90,
-        "current_val": initial_capital
+        "paths": paths
     }
 
-# -------------------------------------------------------
-# OUTPUT TABS
-# -------------------------------------------------------
+# ---------------------------------------------------------
+# OUTPUT
+# ---------------------------------------------------------
 
 if st.session_state.results:
 
@@ -326,6 +317,27 @@ if st.session_state.results:
 
         st.plotly_chart(fig, use_container_width=True)
 
+        final_median = r["median"][-1]
+        final_p10 = r["p10"][-1]
+
+        total_contrib = monthly_savings * 12 * horizon
+
+        growth_component = final_median - (initial_capital + total_contrib)
+
+        st.subheader("Insights")
+
+        st.info(f"""
+Expected portfolio value after {horizon} years: **€{final_median:,.0f}**
+
+Pessimistic scenario (10th percentile): **€{final_p10:,.0f}**
+""")
+
+        st.write(f"""
+Total invested: **€{initial_capital + total_contrib:,.0f}**
+
+Estimated market growth contribution: **€{growth_component:,.0f}**
+""")
+
     # Risk
     with tabs[2]:
 
@@ -336,13 +348,14 @@ if st.session_state.results:
 
         fig = go.Figure()
 
-        fig.add_trace(go.Scatter(
-            x=x,
-            y=norm.pdf(x, mu, sigma),
-            fill="tozeroy"
-        ))
+        fig.add_trace(go.Scatter(x=x, y=norm.pdf(x, mu, sigma), fill="tozeroy"))
 
         st.plotly_chart(fig, use_container_width=True)
+
+        st.write(f"""
+Typical yearly returns may fall roughly between  
+**{(mu-sigma)*100:.1f}% and {(mu+sigma)*100:.1f}%**
+""")
 
     # Rebalance
     with tabs[3]:
@@ -354,7 +367,7 @@ if st.session_state.results:
 
             val = st.number_input(
                 f"Current {n} (€)",
-                value=float(w * r["current_val"]),
+                value=float(w * initial_capital),
                 key=f"reb_{n}"
             )
 
@@ -377,7 +390,7 @@ if st.session_state.results:
                 "Action": "€{:,.0f}"
             }))
 
-    # Risk contribution
+    # Advanced Risk
     with tabs[4]:
 
         rc_df = pd.DataFrame({
