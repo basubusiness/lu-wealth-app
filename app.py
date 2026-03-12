@@ -7,10 +7,10 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 
 # ---------------------------------------------------
-# ASSUMPTION REGISTRY
+# ASSUMPTIONS
 # ---------------------------------------------------
 
-MODEL_VERSION = "1.0"
+MODEL_VERSION = "1.1"
 
 ASSUMPTIONS = {
 
@@ -20,12 +20,6 @@ ASSUMPTIONS = {
 
 "simulation": {
 "paths": 2000
-},
-
-"risk_profiles": {
-"Conservative": 0.08,
-"Balanced": 0.13,
-"Aggressive": 0.18
 }
 
 }
@@ -63,7 +57,7 @@ CORR_RULES = {
 }
 
 # ---------------------------------------------------
-# BUILD CORRELATION MATRIX
+# CORRELATION MATRIX
 # ---------------------------------------------------
 
 def build_corr(selected):
@@ -76,24 +70,23 @@ def build_corr(selected):
             ca = ASSETS[a]["cat"]
             cb = ASSETS[b]["cat"]
 
-            if a==b:
-                mat.loc[a,b]=1
+            if a == b:
+                mat.loc[a,b] = 1
             else:
-                key=(ca,cb)
+                key = (ca,cb)
 
                 if key not in CORR_RULES:
-                    key=(cb,ca)
+                    key = (cb,ca)
 
-                mat.loc[a,b]=CORR_RULES[key]
+                mat.loc[a,b] = CORR_RULES[key]
 
     return mat.astype(float)
 
-
 # ---------------------------------------------------
-# PORTFOLIO OPTIMIZER
+# PORTFOLIO OPTIMIZER (TARGET RETURN)
 # ---------------------------------------------------
 
-def optimize_portfolio(names):
+def optimize_portfolio(names,target_return):
 
     rets = np.array([ASSETS[a]["return"] for a in names])
     vols = np.array([ASSETS[a]["vol"] for a in names])
@@ -104,22 +97,34 @@ def optimize_portfolio(names):
     corr = build_corr(names)
     cov = np.diag(vols) @ corr.values @ np.diag(vols)
 
-    def vol(w):
-        return np.sqrt(w.T@cov@w)
+    def port_vol(w):
+        return np.sqrt(w.T @ cov @ w)
 
-    cons=[{"type":"eq","fun":lambda w:np.sum(w)-1}]
+    constraints = [
 
-    bounds=[(0,1)]*len(names)
+        {"type":"eq","fun":lambda w: np.sum(w)-1},
+        {"type":"ineq","fun":lambda w: w@rets - target_return}
 
-    res=minimize(vol,np.ones(len(names))/len(names),bounds=bounds,constraints=cons)
+    ]
 
-    w=res.x
+    bounds = [(0,1)]*len(names)
 
-    port_r = w@rets
-    port_v = np.sqrt(w.T@cov@w)
+    res = minimize(
+        port_vol,
+        np.ones(len(names))/len(names),
+        bounds=bounds,
+        constraints=constraints
+    )
+
+    if not res.success:
+        raise ValueError("Target return not achievable")
+
+    w = res.x
+
+    port_r = w @ rets
+    port_v = np.sqrt(w.T @ cov @ w)
 
     return w,port_r,port_v
-
 
 # ---------------------------------------------------
 # MONTE CARLO SIMULATION
@@ -129,67 +134,64 @@ def simulate(mu,sigma,years,start,monthly,growth):
 
     sims = ASSUMPTIONS["simulation"]["paths"]
 
-    paths=np.zeros((sims,years+1))
-    paths[:,0]=start
+    paths = np.zeros((sims,years+1))
+    paths[:,0] = start
 
     for s in range(sims):
 
-        wealth=start
+        wealth = start
 
         for t in range(1,years+1):
 
-            r=np.random.normal(mu,sigma)
+            r = np.random.normal(mu,sigma)
 
             contrib = monthly*12*((1+growth)**(t-1))
 
             wealth = wealth*(1+r) + contrib
 
-            paths[s,t]=wealth
+            paths[s,t] = wealth
 
     return paths
 
-
 # ---------------------------------------------------
-# INSIGHT ENGINE
+# INSIGHTS
 # ---------------------------------------------------
 
 def compute_insights(paths,return_rate,monthly):
 
-    median=np.median(paths,axis=0)
+    median = np.median(paths,axis=0)
 
     monthly_growth = median*(return_rate/12)
 
-    tipping=None
+    tipping = None
 
     for i,g in enumerate(monthly_growth):
 
-        if g>=monthly:
-            tipping=i
+        if g >= monthly:
+            tipping = i
             break
 
     return median,monthly_growth,tipping
 
-
 # ---------------------------------------------------
-# ENGINE VALIDATION
+# VALIDATION
 # ---------------------------------------------------
 
 def validate_engine(weights,volatility,paths):
 
-    if abs(sum(weights)-1)>1e-6:
+    if abs(sum(weights)-1) > 1e-6:
         raise ValueError("Weights invalid")
 
-    if volatility<=0:
+    if volatility <= 0:
         raise ValueError("Volatility invalid")
 
-    returns = paths[:,1:]/paths[:,:-1]-1
+    returns = paths[:,1:] / paths[:,:-1] - 1
 
-    if (returns<-1).any():
+    if (returns < -1).any():
         raise ValueError("Impossible return generated")
 
-
 # ---------------------------------------------------
-# UI INPUTS
+# UI
 # ---------------------------------------------------
 
 st.title("LU Wealth Architect")
@@ -200,15 +202,19 @@ list(ASSETS.keys()),
 default=list(ASSETS.keys())[:5]
 )
 
+target_return = st.slider(
+"Target Return %",
+3.0,
+10.0,
+6.5
+)/100
+
 initial = st.number_input("Initial Capital €",10000,5000000,100000)
 monthly = st.number_input("Monthly Investment €",0,20000,3000)
-growth = st.slider("Contribution Growth %",0,10,3)/100
-years = st.slider("Horizon (years)",1,40,20)
 
-risk_profile = st.selectbox(
-"Risk Profile",
-list(ASSUMPTIONS["risk_profiles"].keys())
-)
+growth = st.slider("Contribution Growth %",0,10,3)/100
+
+years = st.slider("Horizon (years)",1,40,20)
 
 # ---------------------------------------------------
 # RUN MODEL
@@ -216,7 +222,7 @@ list(ASSUMPTIONS["risk_profiles"].keys())
 
 if st.button("Build Plan"):
 
-    w,port_r,port_v = optimize_portfolio(selected)
+    w,port_r,port_v = optimize_portfolio(selected,target_return)
 
     paths = simulate(port_r,port_v,years,initial,monthly,growth)
 
@@ -224,28 +230,29 @@ if st.button("Build Plan"):
 
     median,monthly_growth,tipping = compute_insights(paths,port_r,monthly)
 
-    # ---------------------------------------------------
-    # RESULTS
-    # ---------------------------------------------------
-
     st.header("Investment Plan")
 
     df = pd.DataFrame({
-        "Asset":selected,
-        "Weight":w,
-        "Invest Today €":w*initial,
-        "Monthly €":w*monthly
+
+    "Asset":selected,
+    "Weight":w,
+    "Invest Today €":w*initial,
+    "Monthly €":w*monthly
+
     })
 
     st.dataframe(df.style.format({
-        "Weight":"{:.1%}",
-        "Invest Today €":"€{:,.0f}",
-        "Monthly €":"€{:,.0f}"
+
+    "Weight":"{:.1%}",
+    "Invest Today €":"€{:,.0f}",
+    "Monthly €":"€{:,.0f}"
+
     }))
 
-    final = median[-1]
+    st.metric("Expected Wealth",f"€{median[-1]:,.0f}")
 
-    st.metric("Expected Wealth",f"€{final:,.0f}")
+    st.write(f"Portfolio Return: {port_r*100:.2f}%")
+    st.write(f"Portfolio Volatility: {port_v*100:.2f}%")
 
     if tipping:
         st.success(f"Compounding overtakes saving around year {tipping}")
