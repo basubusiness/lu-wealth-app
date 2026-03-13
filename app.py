@@ -52,16 +52,54 @@ ASSUMPTIONS = {
 # ASSET UNIVERSE
 # ---------------------------------------------------
 
-ASSETS = {
-    "World Equity":{"return":0.075,"vol":0.16,"cat":"Equity"},
-    "US Equity":{"return":0.078,"vol":0.17,"cat":"Equity"},
-    "Emerging Markets":{"return":0.08,"vol":0.22,"cat":"Equity"},
-    "Global REIT":{"return":0.065,"vol":0.18,"cat":"Real"},
-    "Euro Gov Bonds":{"return":0.03,"vol":0.06,"cat":"Bond"},
-    "Corp Bonds":{"return":0.035,"vol":0.07,"cat":"Bond"},
-    "Gold":{"return":0.065,"vol":0.17,"cat":"Real"},
-    "Cash":{"return":0.02,"vol":0.01,"cat":"Cash"}
+ASSET_CLASSES = {
+
+    "Equity": {
+        "min":0.4,
+        "max":0.9,
+        "assets":{
+            "World Equity":{"return":0.075,"vol":0.16},
+            "US Equity":{"return":0.078,"vol":0.17},
+            "Emerging Markets":{"return":0.08,"vol":0.22}
+        }
+    },
+
+    "Bond":{
+        "min":0.1,
+        "max":0.5,
+        "assets":{
+            "Euro Gov Bonds":{"return":0.03,"vol":0.06},
+            "Corp Bonds":{"return":0.035,"vol":0.07}
+        }
+    },
+
+    "Real":{
+        "min":0.05,
+        "max":0.25,
+        "assets":{
+            "Global REIT":{"return":0.065,"vol":0.18}
+        }
+    },
+
+    "Commodity":{
+        "min":0.0,
+        "max":0.15,
+        "assets":{
+            "Gold":{"return":0.065,"vol":0.17}
+        }
+    }
 }
+
+ASSETS = {}
+
+for cls,data in ASSET_CLASSES.items():
+    for name,params in data["assets"].items():
+
+        ASSETS[name] = {
+            "return":params["return"],
+            "vol":params["vol"],
+            "cat":cls
+        }
 
 CORR_RULES = {
     ("Equity","Equity"):0.85,
@@ -116,23 +154,36 @@ def optimize_portfolio(names, target):
     cov = np.diag(vols) @ corr @ np.diag(vols)
     max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
 
-    equity_idx = [i for i, a in enumerate(names) if ASSETS[a]["cat"] == "Equity"]
-    bond_idx = [i for i, a in enumerate(names) if ASSETS[a]["cat"] == "Bond"]
-    real_idx = [i for i, a in enumerate(names) if ASSETS[a]["cat"] == "Real"]
+    class_indices = {}
+
+    for i, a in enumerate(names):
+    
+        cls = ASSETS[a]["cat"]
+    
+        if cls not in class_indices:
+            class_indices[cls] = []
+    
+        class_indices[cls].append(i)
 
     # Build Dynamic Constraints
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
     ret_constraint = {"type": "ineq", "fun": lambda w: w @ rets - target}
     constraints.append(ret_constraint)
 
-    if equity_idx:
-        constraints += [{"type": "ineq", "fun": lambda w: np.sum(w[equity_idx]) - 0.4},
-                        {"type": "ineq", "fun": lambda w: 0.8 - np.sum(w[equity_idx])}]
-    if bond_idx:
-        constraints += [{"type": "ineq", "fun": lambda w: np.sum(w[bond_idx]) - 0.1},
-                        {"type": "ineq", "fun": lambda w: 0.5 - np.sum(w[bond_idx])}]
-    if real_idx:
-        constraints += [{"type": "ineq", "fun": lambda w: np.sum(w[real_idx]) - 0.05}]
+    for cls, idx in class_indices.items():
+
+        min_w = ASSET_CLASSES[cls]["min"]
+        max_w = ASSET_CLASSES[cls]["max"]
+    
+        constraints.append(
+            {"type": "ineq",
+             "fun": lambda w, idx=idx, min_w=min_w: np.sum(w[idx]) - min_w}
+        )
+    
+        constraints.append(
+            {"type": "ineq",
+             "fun": lambda w, idx=idx, max_w=max_w: max_w - np.sum(w[idx])}
+        )
 
     bounds = [(0, max_w)] * len(names)
 
@@ -198,7 +249,21 @@ with c5: growth_pct = st.slider("Saving Growth %", 0, 10, 3)
 confidence = st.slider("Projection confidence level", 80, 99, 90) / 100
 target, growth = target_pct / 100, growth_pct / 100
 
-assets = st.multiselect("Assets", list(ASSETS.keys()), default=list(ASSETS.keys())[:5])
+selected_assets = []
+
+for cls,data in ASSET_CLASSES.items():
+
+    with st.expander(cls,expanded=True):
+
+        for asset in data["assets"]:
+
+            default = True if cls in ["Equity","Bond"] else False
+
+            if st.checkbox(asset,value=default):
+
+                selected_assets.append(asset)
+
+assets = selected_assets
 
 if "corr_override" in st.session_state:
     if st.session_state["corr_override"].shape[0] != len(assets):
