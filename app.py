@@ -165,10 +165,36 @@ if st.button("Build Plan") and selected_assets:
 
     with tab4:
         st.subheader("Rebalancing")
-        current = {a: st.number_input(f"Current {a}", value=0.0) for a in selected_assets}
-        total_curr = sum(current.values()) if sum(current.values()) > 0 else initial
-        rebal_df = pd.DataFrame({"Asset": selected_assets, "Target €": [wi*total_curr for wi in w], "Current €": list(current.values())})
+        
+        # Use a form to prevent refresh-on-every-keystroke
+        with st.form("rebalance_form"):
+            st.write("Enter your current holdings (Defaults to recommended):")
+            
+            current_vals = {}
+            # Create columns for inputs to keep it compact
+            reb_cols = st.columns(2)
+            for i, a in enumerate(selected_assets):
+                # We find the recommended 'Invest Now' value for the default
+                recommended_default = float(plan.loc[plan['Asset'] == a, 'Invest Now'].iloc[0])
+                
+                with reb_cols[i % 2]:
+                    current_vals[a] = st.number_input(
+                        f"Current {a}", 
+                        value=recommended_default, 
+                        key=f"rebal_input_{a}"
+                    )
+            
+            submit_rebal = st.form_submit_button("Update Rebalance Table")
+    
+        # Table updates only when button is pressed or on first load
+        total_curr = sum(current_vals.values())
+        rebal_df = pd.DataFrame({
+            "Asset": selected_assets, 
+            "Target €": [wi * total_curr for wi in w], 
+            "Current €": [current_vals[a] for a in selected_assets]
+        })
         rebal_df["Buy/Sell"] = rebal_df["Target €"] - rebal_df["Current €"]
+        
         st.dataframe(rebal_df.style.format({
             "Target €": "€{:,.0f}", 
             "Current €": "€{:,.0f}", 
@@ -178,3 +204,10 @@ if st.button("Build Plan") and selected_assets:
     with tab5:
         st.write("Asset Dictionary View")
         st.dataframe(pd.DataFrame(ASSETS).T)
+        
+        # Restored Correlation Table logic from v0
+        if "corr_override" not in st.session_state: 
+            st.session_state["corr_override"] = build_corr(selected_assets)
+        
+        st.write("Correlation Matrix (Editable):")
+        st.session_state["corr_override"] = st.data_editor(st.session_state["corr_override"])
