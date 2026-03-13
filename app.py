@@ -67,8 +67,8 @@ def optimize_portfolio(names, target_r):
     original_returns = np.array([ASSETS[a]["return"] for a in names])
     vols = np.array([ASSETS[a]["vol"] for a in names])
     
-    # 1. Hardcode or update dict to 0.8 to give the target "fuel"
-    shrink = 0.8 
+    # 1. Near-zero shrinkage (0.95) to ensure assets keep their yield potential
+    shrink = 0.95 
     rets = shrink * original_returns + (1 - shrink) * np.mean(original_returns)
     
     corr = build_corr(names).values
@@ -78,13 +78,15 @@ def optimize_portfolio(names, target_r):
         port_return = w @ r
         port_vol = np.sqrt(w.T @ c @ w) + 1e-6
         
-        sharpe_loss = -(port_return / port_vol)
+        # 2. Excess Return Sharpe Ratio (using 2% Risk-Free Rate)
+        rf = 0.02
+        sharpe_loss = -((port_return - rf) / port_vol)
         
-        # 2. Keep the Heavy Gravity mandate
-        target_penalty = 250.0 * np.maximum(0, t - port_return)**2 
+        # 3. Mega-Gravity Penalty (500.0) to mandate hitting the user's target %
+        target_penalty = 500.0 * np.maximum(0, t - port_return)**2 
         
-        # 3. Increase to 0.15 to fight the concentration from 0.8 shrinkage
-        div_penalty = 0.15 * np.sum(w**2)
+        # 4. Balanced Diversification (0.10) to prevent 2-asset portfolios
+        div_penalty = 0.10 * np.sum(w**2)
         
         return sharpe_loss + target_penalty + div_penalty
 
@@ -92,8 +94,8 @@ def optimize_portfolio(names, target_r):
         objective,
         np.ones(len(names)) / len(names), 
         args=(cov, rets, target_r), 
-        # 4. Increased to 0.45 to ensure 6.5% is mathematically reachable
-        bounds=[(0, 0.45)] * len(names), 
+        # 5. Ceiling at 0.50 so the math actually has room to hit 6.5%
+        bounds=[(0, 0.50)] * len(names), 
         constraints=[{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
     )
     
