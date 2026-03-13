@@ -138,32 +138,12 @@ with c5: growth_pct = st.slider("Saving Growth %", 0, 10, 3)
 
 target, growth = target_pct / 100, growth_pct / 100
 
+# FIX: Populate selected_assets from session state so alert works instantly
+selected_assets = [a for a in ASSETS.keys() if st.session_state.get(f"asset_{a}", False)]
 
-
-st.subheader("Asset Selection")
-
-with st.expander("Configure Asset Universe", expanded=False):
-    def sync_category(cat_name, assets_in_cat):
-        m_key = f"master_{cat_name}"
-        for a in assets_in_cat: st.session_state[f"asset_{a}"] = st.session_state[m_key]
-
-    selected_assets = []
-    cats = sorted(list(set(d["cat"] for d in ASSETS.values())))
-    cols = st.columns(len(cats))
-
-    for i, cat in enumerate(cats):
-        with cols[i]:
-            st.markdown(f"**{cat}**")
-            cat_assets = [n for n, d in ASSETS.items() if d["cat"] == cat]
-            st.checkbox(f"All {cat}", key=f"master_{cat}", on_change=sync_category, args=(cat, cat_assets))
-            for a in cat_assets:
-                if st.checkbox(a, key=f"asset_{a}"):
-                    selected_assets.append(a)
-
-# 2. NOW SHOW THE WARNING (Variable now exists)
+# SHOW THE ALERT BELOW TARGET
 if selected_assets:
     df_lookup = st.session_state["asset_settings"].set_index("Asset")
-    # Get the max return from the currently checked assets in the Tactical Engine
     max_available_return = df_lookup.loc[selected_assets, "return"].max()
     
     if target > max_available_return:
@@ -173,7 +153,23 @@ if selected_assets:
 else:
     st.info("Select assets below to validate your target return.")
 
+st.subheader("Asset Selection")
 
+with st.expander("Configure Asset Universe", expanded=False):
+    def sync_category(cat_name, assets_in_cat):
+        m_key = f"master_{cat_name}"
+        for a in assets_in_cat: st.session_state[f"asset_{a}"] = st.session_state[m_key]
+
+    cats = sorted(list(set(d["cat"] for d in ASSETS.values())))
+    cols = st.columns(len(cats))
+
+    for i, cat in enumerate(cats):
+        with cols[i]:
+            st.markdown(f"**{cat}**")
+            cat_assets = [n for n, d in ASSETS.items() if d["cat"] == cat]
+            st.checkbox(f"All {cat}", key=f"master_{cat}", on_change=sync_category, args=(cat, cat_assets))
+            for a in cat_assets:
+                st.checkbox(a, key=f"asset_{a}")
 
 if "corr_override" not in st.session_state or st.session_state.get("last_selected_corr") != sorted(selected_assets):
     st.session_state["corr_override"] = build_corr(sorted(selected_assets))
