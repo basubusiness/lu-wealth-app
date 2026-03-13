@@ -354,19 +354,24 @@ if st.button("Build Plan"):
 
     plan = plan[plan["Weight"] > 0.01]
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Plan", "Projection", "Risk", "Rebalance", "Engine"])
-    with tab1:
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Plan", "Projection", "Risk", "Rebalance", "Engine"])
 
-        st.dataframe(
-            plan.style.format({
-                "Weight":"{:.1%}",
-                "Invest Now":"€{:,.0f}",
-                "Monthly":"€{:,.0f}"
-            }),
-            use_container_width=True
-        )
-    
-        c1,c2,c3,c4,c5 = st.columns(5)
+# ---------------------------------------------------
+# PLAN TAB
+# ---------------------------------------------------
+
+with tab1:
+
+    st.dataframe(
+        plan.style.format({
+            "Weight":"{:.1%}",
+            "Invest Now":"€{:,.0f}",
+            "Monthly":"€{:,.0f}"
+        }),
+        use_container_width=True
+    )
+
+    c1,c2,c3,c4,c5 = st.columns(5)
 
     with c1:
         st.markdown(f"""
@@ -485,7 +490,7 @@ with tab4:
 
     total_current = sum(current.values())
 
-    target_values = plan["Weight"]*total_current
+    target_values = plan["Weight"] * total_current
 
     rebalance = target_values - list(current.values())
 
