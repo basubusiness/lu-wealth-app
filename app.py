@@ -75,20 +75,15 @@ def build_corr(selected):
     return mat.astype(float)
 
 def optimize_portfolio(names, target_r):
-    # PULL FROM EDITABLE TABLE
     df = st.session_state["asset_settings"].set_index("Asset")
     rets_list = df.loc[names, "return"].values
     vols_list = df.loc[names, "vol"].values
-        
     original_returns = np.array(rets_list)
     vols = np.array(vols_list)
-    
     shrink = 0.95 
     rets = shrink * original_returns + (1 - shrink) * np.mean(original_returns)
-    
     corr = st.session_state["corr_override"].values
     cov = np.diag(vols) @ corr @ np.diag(vols)
-
     def objective(w, c, r, t):
         port_return = w @ r
         port_vol = np.sqrt(w.T @ c @ w) + 1e-6
@@ -97,7 +92,6 @@ def optimize_portfolio(names, target_r):
         target_penalty = 500.0 * np.maximum(0, t - port_return)**2 
         div_penalty = 0.10 * np.sum(w**2)
         return sharpe_loss + target_penalty + div_penalty
-
     res = minimize(
         objective,
         np.ones(len(names)) / len(names), 
@@ -105,11 +99,9 @@ def optimize_portfolio(names, target_r):
         bounds=[(0, 0.50)] * len(names), 
         constraints=[{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
     )
-    
     w = np.round(res.x, 4)
     w[w < 0.01] = 0 
     if np.sum(w) > 0: w = w / np.sum(w)
-    
     return w, w @ rets, np.sqrt(w.T @ cov @ w)
     
 def simulate(mu, sigma, years, start, monthly, growth):
@@ -138,14 +130,13 @@ with c5: growth_pct = st.slider("Saving Growth %", 0, 10, 3)
 
 target, growth = target_pct / 100, growth_pct / 100
 
-# FIX: Populate selected_assets from session state so alert works instantly
+# FIX: Define selected_assets early and correctly
 selected_assets = [a for a in ASSETS.keys() if st.session_state.get(f"asset_{a}", False)]
 
-# SHOW THE ALERT BELOW TARGET
+# ALERT LOGIC
 if selected_assets:
     df_lookup = st.session_state["asset_settings"].set_index("Asset")
     max_available_return = df_lookup.loc[selected_assets, "return"].max()
-    
     if target > max_available_return:
         st.error(f"⚠️ **Target Unachievable**: Your {target_pct}% target exceeds the highest return in your selection ({max_available_return*100:.1f}%).")
     elif target > 0.08:
@@ -154,7 +145,6 @@ else:
     st.info("Select assets below to validate your target return.")
 
 st.subheader("Asset Selection")
-
 with st.expander("Configure Asset Universe", expanded=False):
     def sync_category(cat_name, assets_in_cat):
         m_key = f"master_{cat_name}"
@@ -162,7 +152,6 @@ with st.expander("Configure Asset Universe", expanded=False):
 
     cats = sorted(list(set(d["cat"] for d in ASSETS.values())))
     cols = st.columns(len(cats))
-
     for i, cat in enumerate(cats):
         with cols[i]:
             st.markdown(f"**{cat}**")
@@ -171,19 +160,22 @@ with st.expander("Configure Asset Universe", expanded=False):
             for a in cat_assets:
                 st.checkbox(a, key=f"asset_{a}")
 
+# Update correlation matrix state based on early selection
 if "corr_override" not in st.session_state or st.session_state.get("last_selected_corr") != sorted(selected_assets):
-    st.session_state["corr_override"] = build_corr(sorted(selected_assets))
-    st.session_state["last_selected_corr"] = sorted(selected_assets)
+    if selected_assets:
+        st.session_state["corr_override"] = build_corr(sorted(selected_assets))
+        st.session_state["last_selected_corr"] = sorted(selected_assets)
 
+# BUILD BUTTON
 if st.button("Build Plan") and selected_assets:
     w, port_r, port_v = optimize_portfolio(selected_assets, target)
     paths = simulate(port_r, port_v, years, initial, monthly, growth)
     st.session_state['results'] = {'w': w, 'port_r': port_r, 'port_v': port_v, 'paths': paths, 'assets': selected_assets}
 
+# RESULTS RENDERING
 if 'results' in st.session_state:
     res = st.session_state['results']
     w, port_r, port_v, paths, selected_assets = res['w'], res['port_r'], res['port_v'], res['paths'], res['assets']
-    
     worst, median, best = np.percentile(paths, [10, 50, 90], axis=0)
     total_invested = initial + sum([monthly * 12 * ((1 + growth)**i) for i in range(years)])
     growth_value = median[-1] - total_invested
@@ -195,7 +187,6 @@ if 'results' in st.session_state:
     with tab1:
         plan = pd.DataFrame({"Asset": selected_assets, "Weight": w, "Invest Now": w * initial, "Monthly": w * monthly})
         st.dataframe(plan[plan["Weight"] > 0.01].style.format({"Weight": "{:.1%}", "Invest Now": "€{:,.0f}", "Monthly": "€{:,.0f}"}), use_container_width=True)
-        
         m_cols = st.columns(5)
         metrics = [
             (f"€{median[-1]:,.0f}", f"Final Portfolio Value ({years}y)"),
@@ -227,7 +218,6 @@ if 'results' in st.session_state:
                 with reb_cols[i % 2]:
                     current_vals[a] = st.number_input(f"Current {a}", value=recommended_default, key=f"rebal_input_{a}")
             st.form_submit_button("Update Rebalance Table")
-        
         total_curr = sum(current_vals.values())
         rebal_df = pd.DataFrame({"Asset": selected_assets, "Target €": [wi * total_curr for wi in w], "Current €": [current_vals[a] for a in selected_assets]})
         rebal_df["Buy/Sell"] = rebal_df["Target €"] - rebal_df["Current €"]
@@ -235,8 +225,6 @@ if 'results' in st.session_state:
 
     with tab5:
         st.header("Tactical Engine Overrides")
-        st.info("Edit Asset DNA and Correlations directly in the tables below.")
-    
         st.subheader("Asset Parameters")
         st.session_state["asset_settings"] = st.data_editor(
             st.session_state["asset_settings"],
@@ -249,7 +237,7 @@ if 'results' in st.session_state:
             use_container_width=True,
             hide_index=True
         )
-    
         st.divider()
         st.subheader("Correlation Matrix (Editable)")
-        st.session_state["corr_override"] = st.data_editor(st.session_state["corr_override"], use_container_width=True)
+        if "corr_override" in st.session_state:
+            st.session_state["corr_override"] = st.data_editor(st.session_state["corr_override"], use_container_width=True)
