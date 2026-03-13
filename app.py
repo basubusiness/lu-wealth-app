@@ -357,16 +357,16 @@ if st.button("Build Plan"):
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Plan", "Projection", "Risk", "Rebalance", "Engine"])
     with tab1:
 
-    st.dataframe(
-        plan.style.format({
-            "Weight":"{:.1%}",
-            "Invest Now":"€{:,.0f}",
-            "Monthly":"€{:,.0f}"
-        }),
-        use_container_width=True
-    )
-
-    c1,c2,c3,c4,c5 = st.columns(5)
+        st.dataframe(
+            plan.style.format({
+                "Weight":"{:.1%}",
+                "Invest Now":"€{:,.0f}",
+                "Monthly":"€{:,.0f}"
+            }),
+            use_container_width=True
+        )
+    
+        c1,c2,c3,c4,c5 = st.columns(5)
 
     with c1:
         st.markdown(f"""
