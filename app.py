@@ -34,23 +34,16 @@ st.markdown("""
 # ASSETS & LOGIC (Original)
 # ---------------------------------------------------
 ASSETS = {
-    # Equities
     "World Equity": {"return": 0.075, "vol": 0.16, "cat": "Equity"},
     "US Equity": {"return": 0.078, "vol": 0.17, "cat": "Equity"},
     "Emerging Markets": {"return": 0.080, "vol": 0.22, "cat": "Equity"},
     "Global Small Cap": {"return": 0.082, "vol": 0.19, "cat": "Equity"},
-
-    # Real Assets
     "Global REIT": {"return": 0.060, "vol": 0.19, "cat": "Real"},
     "Gold": {"return": 0.065, "vol": 0.17, "cat": "Real"},
     "Broad Commodities": {"return": 0.040, "vol": 0.20, "cat": "Real"},
-
-    # Bonds
     "Euro Gov Bonds": {"return": 0.030, "vol": 0.06, "cat": "Bond"},
     "Corp Bonds": {"return": 0.035, "vol": 0.07, "cat": "Bond"},
     "Global Inflation Bonds": {"return": 0.032, "vol": 0.05, "cat": "Bond"},
-
-    # Cash
     "Cash": {"return": 0.020, "vol": 0.01, "cat": "Cash"}
 }
 CORR_RULES = {
@@ -59,12 +52,9 @@ CORR_RULES = {
     ("Cash", "Equity"): 0.05, ("Cash", "Bond"): 0.10, ("Cash", "Real"): 0.05, ("Cash", "Cash"): 1.0
 }
 
-# --- GLOBAL INITIALIZATION (Fixes KeyError) ---
-if "param_overrides" not in st.session_state:
-    st.session_state["param_overrides"] = {
-        a: {"return": ASSETS[a]["return"], "vol": ASSETS[a]["vol"]} 
-        for a in ASSETS.keys()
-    }
+# --- GLOBAL INITIALIZATION ---
+if "asset_settings" not in st.session_state:
+    st.session_state["asset_settings"] = pd.DataFrame(ASSETS).T.reset_index().rename(columns={'index': 'Asset'})
 
 if "init" not in st.session_state:
     for a in ASSETS.keys(): st.session_state[f"asset_{a}"] = True
@@ -85,13 +75,10 @@ def build_corr(selected):
     return mat.astype(float)
 
 def optimize_portfolio(names, target_r):
-    # PULL FROM OVERRIDES (The requested change)
-    rets_list = []
-    vols_list = []
-    for a in names:
-        overrides = st.session_state["param_overrides"].get(a, ASSETS[a])
-        rets_list.append(overrides["return"])
-        vols_list.append(overrides["vol"])
+    # PULL FROM EDITABLE TABLE
+    df = st.session_state["asset_settings"].set_index("Asset")
+    rets_list = df.loc[names, "return"].values
+    vols_list = df.loc[names, "vol"].values
         
     original_returns = np.array(rets_list)
     vols = np.array(vols_list)
@@ -99,7 +86,6 @@ def optimize_portfolio(names, target_r):
     shrink = 0.95 
     rets = shrink * original_returns + (1 - shrink) * np.mean(original_returns)
     
-    # Use the edited Correlation Matrix
     corr = st.session_state["corr_override"].values
     cov = np.diag(vols) @ corr @ np.diag(vols)
 
@@ -172,7 +158,6 @@ with st.expander("Configure Asset Universe", expanded=False):
                 if st.checkbox(a, key=f"asset_{a}"):
                     selected_assets.append(a)
 
-# Sync correlation matrix to session state immediately
 if "corr_override" not in st.session_state or st.session_state.get("last_selected_corr") != sorted(selected_assets):
     st.session_state["corr_override"] = build_corr(sorted(selected_assets))
     st.session_state["last_selected_corr"] = sorted(selected_assets)
@@ -240,10 +225,6 @@ if 'results' in st.session_state:
         st.info("Edit Asset DNA and Correlations directly in the tables below.")
     
         st.subheader("Asset Parameters")
-        # Only show the assets the user has actually selected in the UI
-        mask = st.session_state["asset_settings"]["Asset"].isin(selected_assets)
-        
-        # The Editor for Returns and Vol
         st.session_state["asset_settings"] = st.data_editor(
             st.session_state["asset_settings"],
             column_config={
