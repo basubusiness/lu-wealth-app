@@ -72,16 +72,17 @@ def optimize_portfolio(names, target):
     corr = build_corr(names).values
     cov = np.diag(vols) @ corr @ np.diag(vols)
     
+    # 1. Keep the constraints as defined (including the return target)
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0},
                    {"type": "ineq", "fun": lambda w: w @ rets - target}]
     
-    # New Code
+    # 2. Pass the 'constraints' variable into the minimize function
     res = minimize(
-        lambda w, c, r: -(w @ r) / (np.sqrt(w.T @ c @ w) + 1e-6) + 0.05 * np.sum(w**2), # Added small epsilon to prevent div by zero
+        lambda w, c, r: -(w @ r) / (np.sqrt(w.T @ c @ w) + 1e-6) + 0.05 * np.sum(w**2),
         np.ones(len(names)) / len(names), 
         args=(cov, rets), 
-        bounds=[(0.02, 0.45)] * len(names), # Added small floor (0.02) to force diversification
-        constraints=[{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}] 
+        bounds=[(0, 0.45)] * len(names), # Set floor to 0 to allow the target constraint room to breathe
+        constraints=constraints 
     )    
     w = res.x
     w[w < 0.002] = 0
