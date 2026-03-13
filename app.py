@@ -34,35 +34,45 @@ st.markdown("""
 # ASSETS & LOGIC (Original)
 # ---------------------------------------------------
 ASSETS = {
+
+    # Equities
     "World Equity": {"return": 0.075, "vol": 0.16, "cat": "Equity"},
     "US Equity": {"return": 0.078, "vol": 0.17, "cat": "Equity"},
-    "Emerging Markets": {"return": 0.08, "vol": 0.22, "cat": "Equity"},
+    "Emerging Markets": {"return": 0.080, "vol": 0.22, "cat": "Equity"},
     "Global Small Cap": {"return": 0.082, "vol": 0.19, "cat": "Equity"},
 
+    # Real Assets
     "Global REIT": {"return": 0.060, "vol": 0.19, "cat": "Real"},
-    "Gold": {"return": 0.045, "vol": 0.17, "cat": "Real"},
+    "Gold": {"return": 0.065, "vol": 0.17, "cat": "Real"},
     "Broad Commodities": {"return": 0.040, "vol": 0.20, "cat": "Real"},
 
-    "Euro Gov Bonds": {"return": 0.03, "vol": 0.06, "cat": "Bond"},
+    # Bonds
+    "Euro Gov Bonds": {"return": 0.030, "vol": 0.06, "cat": "Bond"},
     "Corp Bonds": {"return": 0.035, "vol": 0.07, "cat": "Bond"},
     "Global Inflation Bonds": {"return": 0.032, "vol": 0.05, "cat": "Bond"},
 
-    "Cash": {"return": 0.02, "vol": 0.01, "cat": "Cash"}
+    # Cash
+    "Cash": {"return": 0.020, "vol": 0.01, "cat": "Cash"}
 }
 CORR_RULES = {
-    # Equity cluster: High, but allows for diversification benefits
-    ("Equity", "Equity"): 0.85, 
-    
-    # Real assets: Dropped to 0.20 to account for Gold/Commodity decoupling
-    ("Equity", "Real"): 0.20,  
-    ("Bond", "Real"): 0.15,
-    ("Real", "Real"): 0.40,
-    
-    # Fixed Income cluster
+
+    # Equity cluster
+    ("Equity", "Equity"): 0.85,
+
+    # Equity relationships
     ("Equity", "Bond"): 0.15,
+    ("Equity", "Real"): 0.20,
+
+    # Fixed income cluster
     ("Bond", "Bond"): 0.60,
-    
-    # Liquidity
+
+    # Bond / real assets
+    ("Bond", "Real"): 0.15,
+
+    # Real assets diversified but related
+    ("Real", "Real"): 0.30,
+
+    # Cash relationships
     ("Cash", "Equity"): 0.05,
     ("Cash", "Bond"): 0.10,
     ("Cash", "Real"): 0.05,
