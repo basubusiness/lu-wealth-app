@@ -238,11 +238,63 @@ if st.button("Build Plan"):
         for i, (val, label) in enumerate(metrics):
             cols[i].markdown(f'<div class="card"><div class="card-value">{val}</div><div class="card-label">{label}</div></div>', unsafe_allow_html=True)
 
+    # PROJECTION TAB
     with tab2:
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=years_axis, y=best, name="Best Case", line=dict(color="green")))
-        fig.add_trace(go.Scatter(x=years_axis, y=median, name="Expected", line=dict(color="blue", width=3)))
-        fig.add_trace(go.Scatter(x=years_axis, y=worst, name="Worst Case", line=dict(color="red")))
+
+        # 1. Calculate the Smooth (Linear) Path for reference
+        smooth_path = [initial]
+        for t in range(1, years + 1):
+            contrib = monthly * 12 * ((1 + growth)**(t-1))
+            # Compound the previous value by the target return and add contribution
+            val = smooth_path[-1] * (1 + port_r) + contrib
+            smooth_path.append(val)
+
+        # 2. Add Scenario Traces
+        fig.add_trace(go.Scatter(x=years_axis, y=best, name="Best Case", 
+                                 line=dict(color="rgba(34, 197, 94, 0.5)", width=2)))
+        
+        fig.add_trace(go.Scatter(x=years_axis, y=median, name="Expected (Median)", 
+                                 line=dict(color="blue", width=4)))
+        
+        fig.add_trace(go.Scatter(x=years_axis, y=worst, name="Worst Case", 
+                                 line=dict(color="rgba(239, 68, 68, 0.5)", width=2)))
+
+        # 3. Add the Smooth Reference Line (Linear Ref)
+        fig.add_trace(go.Scatter(x=years_axis, y=smooth_path, name="Theoretical (Smooth)", 
+                                 line=dict(color="orange", dash="dot", width=2)))
+
+        # 4. Add numeric values at the tips (Last data point)
+        tips = [
+            (best[-1], "Best", "green"),
+            (median[-1], "Expected", "blue"),
+            (worst[-1], "Worst", "red"),
+            (smooth_path[-1], "Smooth", "orange")
+        ]
+
+        for val, label, color in tips:
+            fig.add_annotation(
+                x=years_axis[-1],
+                y=val,
+                text=f"€{val:,.0f}",
+                showarrow=True,
+                arrowhead=1,
+                ax=50,
+                ay=0,
+                bgcolor="white",
+                bordercolor=color,
+                borderwidth=1
+            )
+
+        # 5. UI Layout Adjustments
+        fig.update_layout(
+            title="Wealth Projection over Time",
+            xaxis_title="Years",
+            yaxis_title="Portfolio Value (€)",
+            hovermode="x unified",
+            margin=dict(r=100) # Space for the labels
+        )
+
         st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
