@@ -93,51 +93,40 @@ def build_corr(selected):
     return mat.astype(float)
 
 def optimize_portfolio(names, target_r):
-    original_returns = np.array([ASSETS[a]["return"] for a in names])
-    vols = np.array([ASSETS[a]["vol"] for a in names])
+    # --- TO BE: PULL FROM OVERRIDES ---
+    # We pull the tactically adjusted Return and Vol from session_state
+    rets_list = []
+    vols_list = []
+    for a in names:
+        overrides = st.session_state["param_overrides"].get(a, ASSETS[a])
+        rets_list.append(overrides["return"])
+        vols_list.append(overrides["vol"])
+        
+    original_returns = np.array(rets_list)
+    vols = np.array(vols_list)
+    # ----------------------------------
     
-    # 1. Near-zero shrinkage (0.95) to ensure assets keep their yield potential
     shrink = 0.95 
     rets = shrink * original_returns + (1 - shrink) * np.mean(original_returns)
     
-    # Use the override from session state if it exists, else use standard build_corr
-    if "corr_override" in st.session_state and st.session_state["corr_override"] is not None:
-        corr = st.session_state["corr_override"].values
-    else:
-        corr = build_corr(names).values
-        
+    # Use the edited Correlation Matrix from the data_editor
+    corr = st.session_state["corr_override"].values
     cov = np.diag(vols) @ corr @ np.diag(vols)
 
     def objective(w, c, r, t):
         port_return = w @ r
         port_vol = np.sqrt(w.T @ c @ w) + 1e-6
-        
-        # 2. Excess Return Sharpe Ratio (using 2% Risk-Free Rate)
         rf = 0.02
         sharpe_loss = -((port_return - rf) / port_vol)
-        
-        # 3. Mega-Gravity Penalty (500.0) to mandate hitting the user's target %
         target_penalty = 500.0 * np.maximum(0, t - port_return)**2 
-        
-        # 4. Balanced Diversification (0.10) to prevent 2-asset portfolios
         div_penalty = 0.10 * np.sum(w**2)
-        
         return sharpe_loss + target_penalty + div_penalty
-
-    # --- TO BE: DYNAMIC BOUNDS ---
-    # We look up the specific slider value for each asset in this 'names' list
-    dynamic_bounds = []
-    for asset_name in names:
-        # Pull from the Tab 5 sliders; default to 0.50 if not found
-        limit = st.session_state.get("asset_overrides", {}).get(asset_name, 0.50)
-        dynamic_bounds.append((0, limit))
-    # -----------------------------
 
     res = minimize(
         objective,
         np.ones(len(names)) / len(names), 
         args=(cov, rets, target_r), 
-        bounds=dynamic_bounds, # Swapped hardcoded list for dynamic_bounds
+        bounds=[(0, 0.50)] * len(names), # Keeping your 50% cap as requested
         constraints=[{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
     )
     
@@ -145,11 +134,7 @@ def optimize_portfolio(names, target_r):
     w[w < 0.01] = 0 
     if np.sum(w) > 0: w = w / np.sum(w)
     
-    # Calculate final stats using the same weights and cov/rets used in optimization
-    final_ret = w @ rets
-    final_vol = np.sqrt(w.T @ cov @ w)
-    
-    return w, final_ret, final_vol
+    return w, w @ rets, np.sqrt(w.T @ cov @ w)
     
 def simulate(mu, sigma, years, start, monthly, growth):
     sims = 2000
@@ -303,53 +288,48 @@ if 'results' in st.session_state:
         }), use_container_width=True)
 
     with tab5:
-        st.header("Tactical Engine & Asset Overrides")
+        st.header("Tactical Engine Overrides")
         
-        # --- Part A: Individual Weight Sliders ---
-        st.subheader("Asset Weight Caps")
-        st.info("Set the maximum allowed weight for each asset. Defaults to 50%.")
+        # --- Part A: Return & Volatility Sliders ---
+        st.subheader("Asset Expected Returns & Volatility")
+        st.info("Adjust the return/risk profile for each asset. These values persist in your session.")
     
-        # Initialize the overrides dict in session state if it doesn't exist
-        if "asset_overrides" not in st.session_state:
-            st.session_state["asset_overrides"] = {a: 0.5 for a in ASSETS.keys()}
+        # Initialize overrides in state if they don't exist
+        if "param_overrides" not in st.session_state:
+            # Clone the defaults from your ASSETS dict
+            st.session_state["param_overrides"] = {
+                a: {"return": ASSETS[a]["return"], "vol": ASSETS[a]["vol"]} 
+                for a in ASSETS.keys()
+            }
     
-        # Create a clean grid for sliders
-        slider_cols = st.columns(3)
-        for i, asset in enumerate(selected_assets):
-            with slider_cols[i % 3]:
-                # Pull the current value from state, or default to 0.5
-                current_val = st.session_state["asset_overrides"].get(asset, 0.5)
-                
-                # Update the dictionary when the slider moves
-                st.session_state["asset_overrides"][asset] = st.slider(
-                    f"Max {asset} (%)",
-                    min_value=0,
-                    max_value=100,
-                    value=int(current_val * 100),
-                    step=5,
-                    key=f"slider_{asset}" 
-                ) / 100
+        for asset in selected_assets:
+            with st.expander(f"Edit Parameters: {asset}", expanded=False):
+                c1, c2 = st.columns(2)
+                with c1:
+                    # Return Slider
+                    st.session_state["param_overrides"][asset]["return"] = st.slider(
+                        f"{asset} Return (%)", 0.0, 20.0, 
+                        float(st.session_state["param_overrides"][asset]["return"] * 100), 
+                        0.5, key=f"ret_{asset}"
+                    ) / 100
+                with c2:
+                    # Volatility Slider
+                    st.session_state["param_overrides"][asset]["vol"] = st.slider(
+                        f"{asset} Volatility (%)", 0.0, 50.0, 
+                        float(st.session_state["param_overrides"][asset]["vol"] * 100), 
+                        0.5, key=f"vol_{asset}"
+                    ) / 100
     
         st.divider()
     
-        # --- Part B: Asset Dictionary Dataframe ---
-        st.subheader("Asset Parameters (Read Only)")
-        st.dataframe(pd.DataFrame(ASSETS).T, use_container_width=True)
-        
-        st.divider()
-    
-        # --- Part C: Correlation Matrix (Editable) ---
+        # --- Part B: Correlation Matrix (Editable) ---
         st.subheader("Correlation Matrix (Editable)")
-        
-        # Rebuild logic: if the selection changes, we need a new matrix
         current_selected = sorted(selected_assets)
-        if "last_selected" not in st.session_state or st.session_state["last_selected"] != current_selected:
-            # Assuming build_corr is your function that creates the matrix from CORR_RULES
+        if "corr_override" not in st.session_state or st.session_state.get("last_selected_corr") != current_selected:
             st.session_state["corr_override"] = build_corr(current_selected)
-            st.session_state["last_selected"] = current_selected
+            st.session_state["last_selected_corr"] = current_selected
         
-        # The Editor: Any changes here are saved back to st.session_state["corr_override"]
         st.session_state["corr_override"] = st.data_editor(
-            st.session_state["corr_override"],
+            st.session_state["corr_override"], 
             use_container_width=True
         )
