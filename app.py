@@ -285,12 +285,38 @@ if 'results' in st.session_state:
         }), use_container_width=True)
 
     with tab5:
+        st.subheader("Optimizer Constraints")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            # This solves your Gold problem by capping how much the math can dump into one bucket
+            max_w = st.slider(
+                "Max Asset Weight (%)", 
+                min_value=10, 
+                max_value=100, 
+                value=50, 
+                step=5,
+                help="Caps any single asset allocation. Try 30-40% for a more 'human' portfolio."
+            ) / 100
+            
+        with col2:
+            # This cleans up the 1% 'dust' positions
+            min_w = st.slider(
+                "Min Position Size (%)", 
+                0, 10, 0, 1,
+                help="Forces the optimizer to ignore tiny positions. Set to 0 for pure math."
+            ) / 100
+    
+        st.divider()
+    
         st.write("Asset Dictionary View")
         st.dataframe(pd.DataFrame(ASSETS).T)
         
-        # Restored Correlation Table logic from v0
-        if "corr_override" not in st.session_state: 
-            st.session_state["corr_override"] = build_corr(selected_assets)
+        # Check if the selection has changed to rebuild the matrix
+        current_selected = sorted(selected_assets)
+        if "last_selected" not in st.session_state or st.session_state["last_selected"] != current_selected:
+            st.session_state["corr_override"] = build_corr(current_selected)
+            st.session_state["last_selected"] = current_selected
         
         st.write("Correlation Matrix (Editable):")
         st.session_state["corr_override"] = st.data_editor(st.session_state["corr_override"])
