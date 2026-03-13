@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="LU Wealth Architect", layout="wide")
 
 # ---------------------------------------------------
-# CARD STYLE (Original)
+# CARD STYLE (Original) 
 # ---------------------------------------------------
 st.markdown("""
 <style>
@@ -34,22 +34,60 @@ st.markdown("""
 # ASSETS & LOGIC (Original)
 # ---------------------------------------------------
 ASSETS = {
+
+    # Core Equities
     "World Equity": {"return": 0.075, "vol": 0.16, "cat": "Equity"},
     "US Equity": {"return": 0.078, "vol": 0.17, "cat": "Equity"},
     "Emerging Markets": {"return": 0.080, "vol": 0.22, "cat": "Equity"},
     "Global Small Cap": {"return": 0.082, "vol": 0.19, "cat": "Equity"},
+
+    # Real Assets
     "Global REIT": {"return": 0.060, "vol": 0.19, "cat": "Real"},
     "Gold": {"return": 0.065, "vol": 0.17, "cat": "Real"},
     "Broad Commodities": {"return": 0.040, "vol": 0.20, "cat": "Real"},
+
+    # Bonds
     "Euro Gov Bonds": {"return": 0.030, "vol": 0.06, "cat": "Bond"},
     "Corp Bonds": {"return": 0.035, "vol": 0.07, "cat": "Bond"},
     "Global Inflation Bonds": {"return": 0.032, "vol": 0.05, "cat": "Bond"},
-    "Cash": {"return": 0.020, "vol": 0.01, "cat": "Cash"}
+
+    # Liquidity
+    "Cash": {"return": 0.020, "vol": 0.01, "cat": "Cash"},
+
+    # X-factor assets
+    "Crypto": {"return": 0.120, "vol": 0.80, "cat": "Alt"},
+    "Semiconductors": {"return": 0.100, "vol": 0.30, "cat": "Alt"},
+    "Frontier Markets": {"return": 0.090, "vol": 0.28, "cat": "Alt"},
+    "Uranium": {"return": 0.100, "vol": 0.35, "cat": "Alt"}
 }
 CORR_RULES = {
-    ("Equity", "Equity"): 0.85, ("Equity", "Bond"): 0.15, ("Equity", "Real"): 0.20,
-    ("Bond", "Bond"): 0.60, ("Bond", "Real"): 0.15, ("Real", "Real"): 0.30,
-    ("Cash", "Equity"): 0.05, ("Cash", "Bond"): 0.10, ("Cash", "Real"): 0.05, ("Cash", "Cash"): 1.0
+
+    # Equity cluster
+    ("Equity","Equity"):0.85,
+
+    # Equity relationships
+    ("Equity","Bond"):0.15,
+    ("Equity","Real"):0.20,
+    ("Equity","Alt"):0.50,
+
+    # Bonds
+    ("Bond","Bond"):0.60,
+    ("Bond","Real"):0.15,
+    ("Bond","Alt"):0.15,
+
+    # Real assets
+    ("Real","Real"):0.30,
+    ("Real","Alt"):0.30,
+
+    # Alternative cluster
+    ("Alt","Alt"):0.55,
+
+    # Cash
+    ("Cash","Equity"):0.05,
+    ("Cash","Bond"):0.10,
+    ("Cash","Real"):0.05,
+    ("Cash","Alt"):0.05,
+    ("Cash","Cash"):1.0
 }
 
 # --- GLOBAL INITIALIZATION ---
