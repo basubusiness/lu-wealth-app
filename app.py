@@ -19,11 +19,13 @@ border:1px solid #e6e6e6;
 background-color:#fafafa;
 text-align:center;
 }
+
 .card-value {
 font-size:28px;
 font-weight:600;
 color:#1f2937;
 }
+
 .card-label {
 font-size:14px;
 color:#6b7280;
@@ -47,419 +49,216 @@ ASSUMPTIONS = {
 }
 
 # ---------------------------------------------------
-# ASSET CLASSES
+# ASSET UNIVERSE
 # ---------------------------------------------------
 
-ASSET_CLASSES = {
-
-    "Equity": {
-        "min":0.4,
-        "max":0.9,
-        "assets":{
-            "World Equity":{"return":0.075,"vol":0.16},
-            "US Equity":{"return":0.078,"vol":0.17},
-            "Emerging Markets":{"return":0.08,"vol":0.22}
-        }
-    },
-
-    "Bond":{
-        "min":0.1,
-        "max":0.5,
-        "assets":{
-            "Euro Gov Bonds":{"return":0.03,"vol":0.06},
-            "Corp Bonds":{"return":0.035,"vol":0.07}
-        }
-    },
-
-    "Real":{
-        "min":0.05,
-        "max":0.25,
-        "assets":{
-            "Global REIT":{"return":0.065,"vol":0.18}
-        }
-    },
-
-    "Commodity":{
-        "min":0.0,
-        "max":0.15,
-        "assets":{
-            "Gold":{"return":0.065,"vol":0.17}
-        }
-    }
+ASSETS = {
+    "World Equity":{"return":0.075,"vol":0.16,"cat":"Equity"},
+    "US Equity":{"return":0.078,"vol":0.17,"cat":"Equity"},
+    "Emerging Markets":{"return":0.08,"vol":0.22,"cat":"Equity"},
+    "Global REIT":{"return":0.065,"vol":0.18,"cat":"Real"},
+    "Euro Gov Bonds":{"return":0.03,"vol":0.06,"cat":"Bond"},
+    "Corp Bonds":{"return":0.035,"vol":0.07,"cat":"Bond"},
+    "Gold":{"return":0.065,"vol":0.17,"cat":"Real"},
+    "Cash":{"return":0.02,"vol":0.01,"cat":"Cash"}
 }
-
-ASSETS = {}
-for cls,data in ASSET_CLASSES.items():
-    for name,params in data["assets"].items():
-        ASSETS[name] = {
-            "return":params["return"],
-            "vol":params["vol"],
-            "cat":cls
-        }
-
-# ---------------------------------------------------
-# CORRELATIONS
-# ---------------------------------------------------
 
 CORR_RULES = {
-
-("Equity","Equity"):0.85,
-("Equity","Bond"):0.2,
-("Equity","Real"):0.15,
-("Equity","Commodity"):0.10,
-
-("Bond","Bond"):0.6,
-("Bond","Real"):0.1,
-("Bond","Commodity"):0.05,
-
-("Real","Real"):0.5,
-("Real","Commodity"):0.2,
-
-("Commodity","Commodity"):0.3
+    ("Equity","Equity"):0.85,
+    ("Equity","Bond"):0.2,
+    ("Equity","Real"):0.15,
+    ("Bond","Bond"):0.6,
+    ("Bond","Real"):0.1,
+    ("Real","Real"):0.5,
+    ("Cash","Equity"):0.05,
+    ("Cash","Bond"):0.2,
+    ("Cash","Real"):0.05,
+    ("Cash","Cash"):1.0
 }
 
+# ---------------------------------------------------
+# HELPER FUNCTIONS
+# ---------------------------------------------------
+
 def build_corr(selected):
-
     mat = pd.DataFrame(index=selected, columns=selected)
-
     for a in selected:
         for b in selected:
-
-            ca = ASSETS[a]["cat"]
-            cb = ASSETS[b]["cat"]
-
+            ca, cb = ASSETS[a]["cat"], ASSETS[b]["cat"]
             if a == b:
-                mat.loc[a,b] = 1
+                mat.loc[a,b] = 1.0
             else:
                 key = (ca, cb) if (ca, cb) in CORR_RULES else (cb, ca)
-                mat.loc[a,b] = CORR_RULES.get(key,0.2)
-
+                mat.loc[a,b] = CORR_RULES[key]
     return mat.astype(float)
+
+def objective(w, cov):
+    vol = np.sqrt(w.T @ cov @ w)
+    concentration = np.sum(w**2)
+    return vol + 0.02 * concentration
 
 # ---------------------------------------------------
 # OPTIMIZER
 # ---------------------------------------------------
 
-def objective(w,cov):
-
-    vol = np.sqrt(w.T@cov@w)
-    concentration = np.sum(w**2)
-
-    return vol + 0.02*concentration
-
-def optimize_portfolio(names,target):
-
+def optimize_portfolio(names, target):
     original_returns = np.array([ASSETS[a]["return"] for a in names])
     vols = np.array([ASSETS[a]["vol"] for a in names])
 
     shrink = ASSUMPTIONS["optimizer"]["return_shrinkage"]
-    rets = shrink*original_returns + (1-shrink)*np.mean(original_returns)
+    rets = shrink * original_returns + (1 - shrink) * np.mean(original_returns)
 
-    corr = build_corr(names).values
-    cov = np.diag(vols)@corr@np.diag(vols)
+    if "corr_override" in st.session_state:
+        corr = np.array(st.session_state["corr_override"])
+    else:
+        corr = build_corr(names).values
 
+    cov = np.diag(vols) @ corr @ np.diag(vols)
     max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
 
-    class_indices={}
+    equity_idx = [i for i, a in enumerate(names) if ASSETS[a]["cat"] == "Equity"]
+    bond_idx = [i for i, a in enumerate(names) if ASSETS[a]["cat"] == "Bond"]
+    real_idx = [i for i, a in enumerate(names) if ASSETS[a]["cat"] == "Real"]
 
-    for i,a in enumerate(names):
-
-        cls = ASSETS[a]["cat"]
-
-        if cls not in class_indices:
-            class_indices[cls]=[]
-
-        class_indices[cls].append(i)
-
-    constraints=[{"type":"eq","fun":lambda w:np.sum(w)-1}]
-
-    ret_constraint={"type":"ineq","fun":lambda w:w@rets-target}
+    # Build Dynamic Constraints
+    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    ret_constraint = {"type": "ineq", "fun": lambda w: w @ rets - target}
     constraints.append(ret_constraint)
 
-    for cls,idx in class_indices.items():
+    if equity_idx:
+        constraints += [{"type": "ineq", "fun": lambda w: np.sum(w[equity_idx]) - 0.4},
+                        {"type": "ineq", "fun": lambda w: 0.8 - np.sum(w[equity_idx])}]
+    if bond_idx:
+        constraints += [{"type": "ineq", "fun": lambda w: np.sum(w[bond_idx]) - 0.1},
+                        {"type": "ineq", "fun": lambda w: 0.5 - np.sum(w[bond_idx])}]
+    if real_idx:
+        constraints += [{"type": "ineq", "fun": lambda w: np.sum(w[real_idx]) - 0.05}]
 
-        min_w = ASSET_CLASSES[cls]["min"]
-        max_w = ASSET_CLASSES[cls]["max"]
+    bounds = [(0, max_w)] * len(names)
 
-        constraints.append(
-            {"type":"ineq","fun":lambda w,idx=idx,min_w=min_w:np.sum(w[idx])-min_w}
-        )
-
-        constraints.append(
-            {"type":"ineq","fun":lambda w,idx=idx,max_w=max_w:max_w-np.sum(w[idx])}
-        )
-
-    bounds=[(0,max_w)]*len(names)
-
-    res=minimize(objective,
-                 np.ones(len(names))/len(names),
-                 args=(cov,),
-                 bounds=bounds,
-                 constraints=constraints,
-                 method="SLSQP")
+    res = minimize(objective, np.ones(len(names)) / len(names), args=(cov,),
+                   bounds=bounds, constraints=constraints, method="SLSQP")
 
     if not res.success:
-        fallback_constraints=[c for c in constraints if c!=ret_constraint]
+        st.warning("⚠️ Target return could not be achieved. Showing lowest-risk portfolio.")
+        fallback_constraints = [c for c in constraints if c != ret_constraint]
+        res = minimize(objective, np.ones(len(names)) / len(names), args=(cov,),
+                       bounds=bounds, constraints=fallback_constraints, method="SLSQP")
+        if not res.success:
+            st.error("Optimization failed. Try selecting more assets.")
+            st.stop()
 
-        res=minimize(objective,
-                     np.ones(len(names))/len(names),
-                     args=(cov,),
-                     bounds=bounds,
-                     constraints=fallback_constraints,
-                     method="SLSQP")
+    w = res.x
+    w[w < 0.002] = 0
+    if np.sum(w) > 0:
+        w = w / np.sum(w)
 
-    w=res.x
-    w[w<0.002]=0
-    w=w/np.sum(w)
-
-    port_r=w@rets
-    port_v=np.sqrt(w.T@cov@w)
-
-    return w,port_r,port_v
+    port_r, port_v = w @ rets, np.sqrt(w.T @ cov @ w)
+    return w, port_r, port_v
 
 # ---------------------------------------------------
 # MONTE CARLO
 # ---------------------------------------------------
 
-def simulate(mu,sigma,years,start,monthly,growth):
+def simulate(mu, sigma, years, start, monthly, growth):
+    sims = ASSUMPTIONS["simulation"]["paths"]
+    df = 5 
+    scale_factor = np.sqrt((df - 2) / df)
+    mu_log = mu - (0.5 * sigma**2)
 
-    sims=ASSUMPTIONS["simulation"]["paths"]
+    paths = np.zeros((sims, years + 1))
+    paths[:, 0] = start
+    shocks = mu_log + np.random.standard_t(df, (sims, years)) * sigma * scale_factor
 
-    df=5
-    scale=np.sqrt((df-2)/df)
-
-    mu_log=mu-0.5*sigma**2
-
-    paths=np.zeros((sims,years+1))
-    paths[:,0]=start
-
-    shocks=mu_log+np.random.standard_t(df,(sims,years))*sigma*scale
-
-    for t in range(1,years+1):
-
-        contrib=monthly*12*((1+growth)**(t-1))
-        paths[:,t]=paths[:,t-1]*np.exp(shocks[:,t-1])+contrib
-
+    for t in range(1, years + 1):
+        contrib = monthly * 12 * ((1 + growth)**(t - 1))
+        paths[:, t] = paths[:, t-1] * np.exp(shocks[:, t-1]) + contrib
     return paths
 
-def scenario_paths(paths,confidence):
-
-    lower=(1-confidence)/2
-    worst=np.percentile(paths,lower*100,axis=0)
-    median=np.percentile(paths,50,axis=0)
-    best=np.percentile(paths,(1-lower)*100,axis=0)
-
-    return worst,median,best
+def scenario_paths(paths, confidence):
+    lower = (1 - confidence) / 2
+    worst = np.percentile(paths, lower * 100, axis=0)
+    median = np.percentile(paths, 50, axis=0)
+    best = np.percentile(paths, (1 - lower) * 100, axis=0)
+    return worst, median, best
 
 # ---------------------------------------------------
-# INPUT UI
+# INPUTS & UI
 # ---------------------------------------------------
 
 st.title("LU Wealth Architect")
 
-c1,c2,c3,c4,c5=st.columns(5)
+c1, c2, c3, c4, c5 = st.columns(5)
+with c1: initial = st.number_input("Initial Capital", 10000, 5000000, 100000)
+with c2: monthly = st.number_input("Monthly Saving", 0, 20000, 3000)
+with c3: years = st.slider("Horizon (years)", 1, 40, 20)
+with c4: target_pct = st.number_input("Target Return %", 3.0, 10.0, 6.5)
+with c5: growth_pct = st.slider("Saving Growth %", 0, 10, 3)
 
-with c1: initial=st.number_input("Initial Capital",10000,5000000,100000)
-with c2: monthly=st.number_input("Monthly Saving",0,20000,3000)
-with c3: years=st.slider("Horizon (years)",1,40,20)
-with c4: target_pct=st.number_input("Target Return %",3.0,10.0,6.5)
-with c5: growth_pct=st.slider("Saving Growth %",0,10,3)
+confidence = st.slider("Projection confidence level", 80, 99, 90) / 100
+target, growth = target_pct / 100, growth_pct / 100
 
-confidence=st.slider("Projection confidence level",80,99,90)/100
-target,growth=target_pct/100,growth_pct/100
+assets = st.multiselect("Assets", list(ASSETS.keys()), default=list(ASSETS.keys())[:5])
 
-selected_assets=[]
-
-for cls,data in ASSET_CLASSES.items():
-
-    with st.expander(cls,expanded=True):
-
-        for asset in data["assets"]:
-
-            default=True if cls in ["Equity","Bond"] else False
-
-            if st.checkbox(asset,value=default):
-                selected_assets.append(asset)
-
-assets=selected_assets
-
-if len(assets)<2:
-    st.warning("Select at least two assets")
-    st.stop()
+if "corr_override" in st.session_state:
+    if st.session_state["corr_override"].shape[0] != len(assets):
+        del st.session_state["corr_override"]
 
 # ---------------------------------------------------
-# BUILD PLAN
+# RUN MODEL
 # ---------------------------------------------------
 
-run = st.button("Build Plan")
-
-if run:
-
+if st.button("Build Plan"):
     w, port_r, port_v = optimize_portfolio(assets, target)
-
     paths = simulate(port_r, port_v, years, initial, monthly, growth)
     worst, median, best = scenario_paths(paths, confidence)
-
     years_axis = list(range(len(median)))
 
     total_invested = initial + sum([monthly * 12 * ((1 + growth)**i) for i in range(years)])
     growth_value = median[-1] - total_invested
     monthly_income = median[-1] * port_r / 12
-
+    
     tipping = next((i for i, g in enumerate(median * (port_r / 12)) if g >= monthly), None)
 
-    plan = pd.DataFrame({
-        "Asset": assets,
-        "Weight": w,
-        "Invest Now": w * initial,
-        "Monthly": w * monthly
-    })
-
+    plan = pd.DataFrame({"Asset": assets, "Weight": w, "Invest Now": w * initial, "Monthly": w * monthly})
     plan = plan[plan["Weight"] > 0.01]
 
-    st.session_state.plan_data = {
-        "plan": plan,
-        "median": median,
-        "best": best,
-        "worst": worst,
-        "paths": paths,
-        "years_axis": years_axis,
-        "port_r": port_r,
-        "port_v": port_v,
-        "growth_value": growth_value,
-        "monthly_income": monthly_income,
-        "tipping": tipping,
-        "total_invested": total_invested
-    }
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Plan", "Projection", "Risk", "Rebalance", "Engine"])
 
-# ---------------------------------------------------
-# TABS
-# ---------------------------------------------------
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Plan", "Projection", "Risk", "Rebalance", "Engine"]
-)
-
-# If user hasn't run the model yet
-if "plan_data" not in st.session_state:
     with tab1:
-        st.info("Click **Build Plan** to generate your investment plan.")
-    st.stop()
+        st.dataframe(plan.style.format({"Weight": "{:.1%}", "Invest Now": "€{:,.0f}", "Monthly": "€{:,.0f}"}), use_container_width=True)
+        cols = st.columns(5)
+        metrics = [
+            (f"€{median[-1]:,.0f}", f"Final Portfolio Value ({years}y)"),
+            (f"{port_r*100:.1f}%", "Typical Yearly Growth"),
+            (f"€{growth_value:,.0f}", f"Growth on €{total_invested:,.0f} invested"),
+            (f"Year {tipping}" if tipping else "N/A", "Compounding Tipping Point"),
+            (f"€{monthly_income:,.0f}", "Est. Monthly Income")
+        ]
+        for i, (val, label) in enumerate(metrics):
+            cols[i].markdown(f'<div class="card"><div class="card-value">{val}</div><div class="card-label">{label}</div></div>', unsafe_allow_html=True)
 
-data = st.session_state.plan_data
+    with tab2:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=years_axis, y=best, name="Best Case", line=dict(color="green")))
+        fig.add_trace(go.Scatter(x=years_axis, y=median, name="Expected", line=dict(color="blue", width=3)))
+        fig.add_trace(go.Scatter(x=years_axis, y=worst, name="Worst Case", line=dict(color="red")))
+        st.plotly_chart(fig, use_container_width=True)
 
-plan = data["plan"]
-median = data["median"]
-best = data["best"]
-worst = data["worst"]
-paths = data["paths"]
-years_axis = data["years_axis"]
-port_r = data["port_r"]
-port_v = data["port_v"]
-growth_value = data["growth_value"]
-monthly_income = data["monthly_income"]
-tipping = data["tipping"]
-total_invested = data["total_invested"]
+    with tab3:
+        fig = go.Figure(go.Histogram(x=paths[:, -1], nbinsx=40))
+        fig.update_layout(title="Distribution of Final Wealth Outcomes")
+        st.plotly_chart(fig)
 
-# ---------------------------------------------------
-# PLAN TAB
-# ---------------------------------------------------
+    with tab4:
+        st.subheader("Rebalancing")
+        current = {a: st.number_input(f"Current {a}", value=float(plan.loc[plan['Asset']==a, 'Invest Now'].iloc[0] if a in plan['Asset'].values else 0)) for a in plan["Asset"]}
+        total_curr = sum(current.values())
+        rebal_df = pd.DataFrame({"Asset": plan["Asset"], "Target €": plan["Weight"] * total_curr, "Current €": list(current.values())})
+        rebal_df["Buy/Sell"] = rebal_df["Target €"] - rebal_df["Current €"]
+        st.dataframe(rebal_df)
 
-with tab1:
-
-    st.dataframe(
-        plan.style.format({
-            "Weight": "{:.1%}",
-            "Invest Now": "€{:,.0f}",
-            "Monthly": "€{:,.0f}"
-        }),
-        use_container_width=True
-    )
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-
-    with c1:
-        st.metric("Final Portfolio Value", f"€{median[-1]:,.0f}")
-
-    with c2:
-        st.metric("Typical Yearly Growth", f"{port_r*100:.1f}%")
-
-    with c3:
-        st.metric("Investment Growth", f"€{growth_value:,.0f}")
-
-    with c4:
-        st.metric("Compounding Tipping Point", f"Year {tipping}")
-
-    with c5:
-        st.metric("Est. Monthly Income", f"€{monthly_income:,.0f}")
-
-# ---------------------------------------------------
-# PROJECTION TAB
-# ---------------------------------------------------
-
-with tab2:
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Scatter(x=years_axis, y=best, name="Best case"))
-    fig.add_trace(go.Scatter(x=years_axis, y=median, name="Expected"))
-    fig.add_trace(go.Scatter(x=years_axis, y=worst, name="Worst case"))
-
-    st.plotly_chart(fig, use_container_width=True)
-
-# ---------------------------------------------------
-# RISK TAB
-# ---------------------------------------------------
-
-with tab3:
-
-    fig = go.Figure()
-
-    fig.add_histogram(
-        x=paths[:, -1],
-        nbinsx=40
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-# ---------------------------------------------------
-# REBALANCE TAB
-# ---------------------------------------------------
-
-with tab4:
-
-    st.subheader("Rebalancing calculator")
-
-    current = {}
-
-    for asset in plan["Asset"]:
-        current[asset] = st.number_input(
-            f"Current value {asset}",
-            value=float(plan.loc[plan["Asset"] == asset, "Invest Now"])
-        )
-
-    total_current = sum(current.values())
-
-    target_values = plan["Weight"] * total_current
-
-    rebalance = target_values - list(current.values())
-
-    rebalance_df = pd.DataFrame({
-        "Asset": plan["Asset"],
-        "Target €": target_values,
-        "Current €": list(current.values()),
-        "Buy / Sell €": rebalance
-    })
-
-    st.dataframe(rebalance_df)
-
-# ---------------------------------------------------
-# ENGINE TAB
-# ---------------------------------------------------
-
-with tab5:
-
-    st.subheader("Model assumptions")
-
-    df = pd.DataFrame(ASSETS).T
-    st.dataframe(df)
+    with tab5:
+        st.dataframe(pd.DataFrame(ASSETS).T)
+        if "corr_override" not in st.session_state: st.session_state["corr_override"] = build_corr(assets)
+        st.session_state["corr_override"] = st.data_editor(st.session_state["corr_override"], key="corr_editor")
