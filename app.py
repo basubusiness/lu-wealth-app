@@ -163,7 +163,7 @@ c1, c2, c3, c4, c5 = st.columns(5)
 with c1: initial = st.number_input("Initial Capital", 10000, 5000000, 100000)
 with c2: monthly = st.number_input("Monthly Saving", 0, 20000, 3000)
 with c3: years = st.slider("Horizon (years)", 1, 40, 20)
-with c4: target_pct = st.number_input("Target Return %", 3.0, 10.0, 6.5)
+with c4: target_pct = st.number_input("Target Return %", 3.0, 15.0, 6.5)
 with c5: growth_pct = st.slider("Saving Growth %", 0, 10, 3)
 
 target, growth = target_pct / 100, growth_pct / 100
