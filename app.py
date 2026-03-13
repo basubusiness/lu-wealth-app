@@ -132,23 +132,37 @@ target, growth = target_pct / 100, growth_pct / 100
 
 # --- Grouped Asset Selection ---
 st.subheader("Asset Selection")
+
+# 1. New Helper function to force-update the checkbox memory
+def sync_category(cat_name, assets_in_cat):
+    master_key = f"master_{cat_name}"
+    # This manually overwrites the 'memory' for every asset in this category
+    for asset in assets_in_cat:
+        st.session_state[f"asset_{asset}"] = st.session_state[master_key]
+
 selected_assets = []
 categories = sorted(list(set(d["cat"] for d in ASSETS.values())))
 cols = st.columns(len(categories))
 
-# --- TO BE (Insert this) ---
 for i, cat in enumerate(categories):
     with cols[i]:
         st.markdown(f"### {cat}")
         cat_assets = [name for name, data in ASSETS.items() if data["cat"] == cat]
         
-        # This Master Toggle now actively controls the 'value' of the loop below
-        master_val = st.checkbox(f"Select All {cat}", value=True, key=f"master_{cat}")
+        # 2. Master Toggle with 'on_change' callback
+        # This runs 'sync_category' immediately when the master is clicked
+        st.checkbox(
+            f"Select All {cat}", 
+            value=True, 
+            key=f"master_{cat}",
+            on_change=sync_category,
+            args=(cat, cat_assets)
+        )
         
         for asset in cat_assets:
-            # By setting value=master_val, the child checkbox is forced to 
-            # sync whenever the master toggle changes.
-            if st.checkbox(asset, value=master_val, key=f"asset_{asset}"):
+            # 3. Individual asset check
+            # We no longer pass 'value=master_val' because the callback handles the state
+            if st.checkbox(asset, key=f"asset_{asset}"):
                 selected_assets.append(asset)
                 
 # 1. Trigger calculation and store in Session State
