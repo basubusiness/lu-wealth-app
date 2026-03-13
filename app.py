@@ -160,39 +160,43 @@ with c5: growth_pct = st.slider("Saving Growth %", 0, 10, 3)
 target, growth = target_pct / 100, growth_pct / 100
 
 # --- Grouped Asset Selection ---
+# --- TO BE REPLACEMENT ---
+
+# 1. Initialize State (Ensures "Select All" is active on first load)
+if "init" not in st.session_state:
+    for a in ASSETS.keys(): st.session_state[f"asset_{a}"] = True
+    for c in set(d["cat"] for d in ASSETS.values()): st.session_state[f"master_{c}"] = True
+    st.session_state["init"] = True
+
 st.subheader("Asset Selection")
 
-# 1. New Helper function to force-update the checkbox memory
-def sync_category(cat_name, assets_in_cat):
-    master_key = f"master_{cat_name}"
-    # This manually overwrites the 'memory' for every asset in this category
-    for asset in assets_in_cat:
-        st.session_state[f"asset_{asset}"] = st.session_state[master_key]
+# 2. Collapsed Selector
+with st.expander("Configure Asset Universe", expanded=False):
+    def sync_category(cat_name, assets_in_cat):
+        m_key = f"master_{cat_name}"
+        for a in assets_in_cat: st.session_state[f"asset_{a}"] = st.session_state[m_key]
 
-selected_assets = []
-categories = sorted(list(set(d["cat"] for d in ASSETS.values())))
-cols = st.columns(len(categories))
+    selected_assets = []
+    cats = sorted(list(set(d["cat"] for d in ASSETS.values())))
+    cols = st.columns(len(cats))
 
-for i, cat in enumerate(categories):
-    with cols[i]:
-        st.markdown(f"### {cat}")
-        cat_assets = [name for name, data in ASSETS.items() if data["cat"] == cat]
-        
-        # 2. Master Toggle with 'on_change' callback
-        # This runs 'sync_category' immediately when the master is clicked
-        st.checkbox(
-            f"Select All {cat}", 
-            value=True, 
-            key=f"master_{cat}",
-            on_change=sync_category,
-            args=(cat, cat_assets)
-        )
-        
-        for asset in cat_assets:
-            # 3. Individual asset check
-            # We no longer pass 'value=master_val' because the callback handles the state
-            if st.checkbox(asset, key=f"asset_{asset}"):
-                selected_assets.append(asset)
+    for i, cat in enumerate(cats):
+        with cols[i]:
+            st.markdown(f"**{cat}**")
+            cat_assets = [n for n, d in ASSETS.items() if d["cat"] == cat]
+            
+            st.checkbox(
+                f"All {cat}", 
+                key=f"master_{cat}", 
+                on_change=sync_category, 
+                args=(cat, cat_assets)
+            )
+            
+            for a in cat_assets:
+                if st.checkbox(a, key=f"asset_{a}"):
+                    selected_assets.append(a)
+
+# --- END REPLACEMENT ---
                 
 # 1. Trigger calculation and store in Session State
 if st.button("Build Plan") and selected_assets:
