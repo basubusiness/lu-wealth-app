@@ -76,12 +76,16 @@ def optimize_portfolio(names, target_r):
     def objective(w, c, r, t):
         port_return = w @ r
         port_vol = np.sqrt(w.T @ c @ w) + 1e-6
-        # Sharpe Ratio Component
+        
+        # Negative Sharpe Ratio (The efficiency goal)
         sharpe_loss = -(port_return / port_vol)
-        # One-sided penalty: Only triggers if port_return < target_r
-        target_penalty = 15.0 * np.maximum(0, t - port_return)**2 
-        # Diversification penalty
+        
+        # 250.0 is the "Heavy Gravity" – it forces the model to hit your target
+        target_penalty = 250.0 * np.maximum(0, t - port_return)**2 
+        
+        # 0.05 keeps things diversified without distorting the return
         div_penalty = 0.05 * np.sum(w**2)
+        
         return sharpe_loss + target_penalty + div_penalty
 
     res = minimize(
