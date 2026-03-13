@@ -169,7 +169,11 @@ if st.button("Build Plan") and selected_assets:
         total_curr = sum(current.values()) if sum(current.values()) > 0 else initial
         rebal_df = pd.DataFrame({"Asset": selected_assets, "Target €": [wi*total_curr for wi in w], "Current €": list(current.values())})
         rebal_df["Buy/Sell"] = rebal_df["Target €"] - rebal_df["Current €"]
-        st.dataframe(rebal_df.style.format("€{:,.0f}"))
+        st.dataframe(rebal_df.style.format({
+            "Target €": "€{:,.0f}", 
+            "Current €": "€{:,.0f}", 
+            "Buy/Sell": "€{:,.0f}"
+        }), use_container_width=True)
 
     with tab5:
         st.write("Asset Dictionary View")
