@@ -75,10 +75,14 @@ def optimize_portfolio(names, target):
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0},
                    {"type": "ineq", "fun": lambda w: w @ rets - target}]
     
-    res = minimize(lambda w, c: np.sqrt(w.T @ c @ w) + 0.02 * np.sum(w**2), 
-                   np.ones(len(names))/len(names), args=(cov,), 
-                   bounds=[(0, 0.4)]*len(names), constraints=constraints)
-    
+    # New Code
+    res = minimize(
+        lambda w, c, r: -(w @ r) / (np.sqrt(w.T @ c @ w) + 1e-6) + 0.05 * np.sum(w**2), # Added small epsilon to prevent div by zero
+        np.ones(len(names)) / len(names), 
+        args=(cov, rets), 
+        bounds=[(0.02, 0.45)] * len(names), # Added small floor (0.02) to force diversification
+        constraints=[{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}] 
+    )    
     w = res.x
     w[w < 0.002] = 0
     if np.sum(w) > 0: w = w / np.sum(w)
