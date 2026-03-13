@@ -355,3 +355,171 @@ if st.button("Build Plan"):
     plan = plan[plan["Weight"] > 0.01]
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Plan", "Projection", "Risk", "Rebalance", "Engine"])
+    with tab1:
+
+    st.dataframe(
+        plan.style.format({
+            "Weight":"{:.1%}",
+            "Invest Now":"€{:,.0f}",
+            "Monthly":"€{:,.0f}"
+        }),
+        use_container_width=True
+    )
+
+    c1,c2,c3,c4,c5 = st.columns(5)
+
+    with c1:
+        st.markdown(f"""
+        <div class="card">
+        <div class="card-value">€{median[-1]:,.0f}</div>
+        <div class="card-label">Projected portfolio value after {years} years</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c2:
+        st.markdown(f"""
+        <div class="card">
+        <div class="card-value">{port_r*100:.1f}%</div>
+        <div class="card-label">Typical yearly growth rate</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c3:
+        st.markdown(f"""
+        <div class="card">
+        <div class="card-value">€{growth_value:,.0f}</div>
+        <div class="card-label">
+        Investment growth on top of €{total_invested:,.0f} contributed
+        </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c4:
+        if tipping:
+            income_at_tipping = median[tipping] * port_r / 12
+
+            st.markdown(f"""
+            <div class="card">
+            <div class="card-value">Year {tipping}</div>
+            <div class="card-label">
+            Growth beats saving (~€{income_at_tipping:,.0f}/month)
+            </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with c5:
+        st.markdown(f"""
+        <div class="card">
+        <div class="card-value">€{monthly_income:,.0f}</div>
+        <div class="card-label">
+        Estimated monthly income after {years} years
+        </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------
+# PROJECTION TAB
+# ---------------------------------------------------
+
+with tab2:
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(x=years_axis,y=best,name="Best case",line=dict(color="green")))
+    fig.add_trace(go.Scatter(x=years_axis,y=median,name="Expected",line=dict(color="blue",width=3)))
+    fig.add_trace(go.Scatter(x=years_axis,y=worst,name="Worst case",line=dict(color="red")))
+
+    smooth_path = [initial]
+
+    for t in range(1, years + 1):
+        contrib = monthly * 12 * ((1 + growth)**(t-1))
+        val = smooth_path[-1] * (1 + port_r) + contrib
+        smooth_path.append(val)
+
+    fig.add_trace(go.Scatter(
+        x=years_axis,
+        y=smooth_path,
+        name="Theoretical (Smooth)",
+        line=dict(color="orange",dash="dot",width=2)
+    ))
+
+    st.plotly_chart(fig,use_container_width=True)
+
+
+# ---------------------------------------------------
+# RISK TAB
+# ---------------------------------------------------
+
+with tab3:
+
+    fig = go.Figure()
+
+    fig.add_histogram(
+        x=paths[:,-1],
+        nbinsx=40
+    )
+
+    fig.update_layout(
+        title="Distribution of possible final wealth outcomes"
+    )
+
+    st.plotly_chart(fig)
+
+
+# ---------------------------------------------------
+# REBALANCE TAB
+# ---------------------------------------------------
+
+with tab4:
+
+    st.subheader("Rebalancing calculator")
+
+    current = {}
+
+    for asset in plan["Asset"]:
+        current[asset] = st.number_input(
+            f"Current value {asset}",
+            value=float(plan.loc[plan["Asset"]==asset,"Invest Now"])
+        )
+
+    total_current = sum(current.values())
+
+    target_values = plan["Weight"]*total_current
+
+    rebalance = target_values - list(current.values())
+
+    rebalance_df = pd.DataFrame({
+        "Asset":plan["Asset"],
+        "Target €":target_values,
+        "Current €":list(current.values()),
+        "Buy / Sell €":rebalance
+    })
+
+    st.dataframe(rebalance_df)
+
+
+# ---------------------------------------------------
+# ENGINE TAB
+# ---------------------------------------------------
+
+with tab5:
+
+    st.subheader("Model assumptions")
+
+    df = pd.DataFrame(ASSETS).T
+    st.dataframe(df)
+
+    st.subheader("Correlation matrix")
+
+    if "corr_override" not in st.session_state:
+        st.session_state["corr_override"] = build_corr(assets)
+
+    corr = st.session_state["corr_override"]
+
+    edited_corr = st.data_editor(
+        corr,
+        key="corr_editor"
+    )
+
+    st.session_state["corr_override"] = edited_corr
