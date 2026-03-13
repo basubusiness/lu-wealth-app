@@ -66,25 +66,25 @@ def build_corr(selected):
 def optimize_portfolio(names, target_r):
     original_returns = np.array([ASSETS[a]["return"] for a in names])
     vols = np.array([ASSETS[a]["vol"] for a in names])
-    shrink = ASSUMPTIONS["optimizer"]["return_shrinkage"]
+    
+    # 1. Hardcode or update dict to 0.8 to give the target "fuel"
+    shrink = 0.8 
     rets = shrink * original_returns + (1 - shrink) * np.mean(original_returns)
     
     corr = build_corr(names).values
     cov = np.diag(vols) @ corr @ np.diag(vols)
 
-    # Internal objective to handle soft-constraints and Sharpe maximization
     def objective(w, c, r, t):
         port_return = w @ r
         port_vol = np.sqrt(w.T @ c @ w) + 1e-6
         
-        # Negative Sharpe Ratio (The efficiency goal)
         sharpe_loss = -(port_return / port_vol)
         
-        # 250.0 is the "Heavy Gravity" – it forces the model to hit your target
+        # 2. Keep the Heavy Gravity mandate
         target_penalty = 250.0 * np.maximum(0, t - port_return)**2 
         
-        # 0.05 keeps things diversified without distorting the return
-        div_penalty = 0.05 * np.sum(w**2)
+        # 3. Increase to 0.15 to fight the concentration from 0.8 shrinkage
+        div_penalty = 0.15 * np.sum(w**2)
         
         return sharpe_loss + target_penalty + div_penalty
 
@@ -92,15 +92,16 @@ def optimize_portfolio(names, target_r):
         objective,
         np.ones(len(names)) / len(names), 
         args=(cov, rets, target_r), 
-        bounds=[(0, 0.40)] * len(names), # Max 40% per asset for cleaner looks
+        # 4. Increased to 0.45 to ensure 6.5% is mathematically reachable
+        bounds=[(0, 0.45)] * len(names), 
         constraints=[{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
     )
     
     w = np.round(res.x, 4)
-    w[w < 0.01] = 0 # Clean up dust
+    w[w < 0.01] = 0 
     if np.sum(w) > 0: w = w / np.sum(w)
     return w, w @ rets, np.sqrt(w.T @ cov @ w)
-
+    
 def simulate(mu, sigma, years, start, monthly, growth):
     sims = 2000
     df = 5
