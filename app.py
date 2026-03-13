@@ -125,11 +125,21 @@ for i, cat in enumerate(categories):
             if st.checkbox(asset, value=select_all, key=f"check_{asset}"):
                 selected_assets.append(asset)
 
+# 1. Trigger calculation and store in Session State
 if st.button("Build Plan") and selected_assets:
     w, port_r, port_v = optimize_portfolio(selected_assets, target)
     paths = simulate(port_r, port_v, years, initial, monthly, growth)
-    worst, median, best = np.percentile(paths, [10, 50, 90], axis=0)
     
+    st.session_state['results'] = {
+        'w': w, 'port_r': port_r, 'port_v': port_v, 'paths': paths, 'assets': selected_assets
+    }
+
+# 2. Check if results exist and display them
+if 'results' in st.session_state:
+    res = st.session_state['results']
+    w, port_r, port_v, paths, selected_assets = res['w'], res['port_r'], res['port_v'], res['paths'], res['assets']
+    
+    worst, median, best = np.percentile(paths, [10, 50, 90], axis=0)
     total_invested = initial + sum([monthly * 12 * ((1 + growth)**i) for i in range(years)])
     growth_value = median[-1] - total_invested
     monthly_income = median[-1] * port_r / 12
