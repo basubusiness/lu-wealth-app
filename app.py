@@ -237,18 +237,25 @@ if 'results' in st.session_state:
 
     with tab5:
         st.header("Tactical Engine Overrides")
-        st.info("Adjust asset DNA. Changes persist and affect the 'Build Plan' calculation.")
-        for asset in selected_assets:
-            with st.expander(f"Edit {asset} Parameters", expanded=False):
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.session_state["param_overrides"][asset]["return"] = st.slider(
-                        "Return (%)", 0.0, 20.0, float(st.session_state["param_overrides"][asset]["return"] * 100), 0.5, key=f"ret_s_{asset}"
-                    ) / 100
-                with c2:
-                    st.session_state["param_overrides"][asset]["vol"] = st.slider(
-                        "Volatility (%)", 0.0, 50.0, float(st.session_state["param_overrides"][asset]["vol"] * 100), 0.5, key=f"vol_s_{asset}"
-                    ) / 100
+        st.info("Edit Asset DNA and Correlations directly in the tables below.")
+    
+        st.subheader("Asset Parameters")
+        # Only show the assets the user has actually selected in the UI
+        mask = st.session_state["asset_settings"]["Asset"].isin(selected_assets)
+        
+        # The Editor for Returns and Vol
+        st.session_state["asset_settings"] = st.data_editor(
+            st.session_state["asset_settings"],
+            column_config={
+                "return": st.column_config.NumberColumn("Return", format="%.3f"),
+                "vol": st.column_config.NumberColumn("Volatility", format="%.3f"),
+                "cat": st.column_config.TextColumn("Category", disabled=True),
+                "Asset": st.column_config.TextColumn("Asset", disabled=True),
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+    
         st.divider()
         st.subheader("Correlation Matrix (Editable)")
         st.session_state["corr_override"] = st.data_editor(st.session_state["corr_override"], use_container_width=True)
