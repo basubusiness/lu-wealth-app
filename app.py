@@ -138,6 +138,18 @@ with c5: growth_pct = st.slider("Saving Growth %", 0, 10, 3)
 
 target, growth = target_pct / 100, growth_pct / 100
 
+if selected_assets:
+    df_lookup = st.session_state["asset_settings"].set_index("Asset")
+    # Get the max return from the currently checked assets in the Tactical Engine
+    max_available_return = df_lookup.loc[selected_assets, "return"].max()
+    
+    if target > max_available_return:
+        st.error(f"⚠️ **Target Unachievable**: Your {target_pct}% target exceeds the highest return in your selection ({max_available_return*100:.1f}%).")
+    elif target > 0.08:
+        st.warning(f"⚡ **Aggressive**: A {target_pct}% target typically requires high Equity exposure.")
+else:
+    st.info("Select assets below to validate your target return.")
+
 st.subheader("Asset Selection")
 
 with st.expander("Configure Asset Universe", expanded=False):
