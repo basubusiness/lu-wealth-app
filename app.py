@@ -262,3 +262,34 @@ if st.button("Build Plan"):
         st.dataframe(pd.DataFrame(ASSETS).T)
         if "corr_override" not in st.session_state: st.session_state["corr_override"] = build_corr(assets)
         st.session_state["corr_override"] = st.data_editor(st.session_state["corr_override"], key="corr_editor")
+        # --- VOLATILITY DRAG EXPLAINER ---
+        st.divider()
+        st.subheader("Why the result is slightly lower than a simple calculator")
+        
+        drag = 0.5 * (port_v**2)
+        realized_net_growth = port_r - drag
+        
+        st.metric(
+            "Typical long-term compound growth",
+            f"{realized_net_growth*100:.2f}%",
+            help="Volatility reduces compounding slightly compared to a smooth return."
+        )
+        
+        # --- Calculate what a smooth calculator would show ---
+        smooth_balance = initial
+        
+        for t in range(1, years + 1):
+            contrib = monthly * 12 * ((1 + growth)**(t-1))
+            smooth_balance = smooth_balance * (1 + port_r) + contrib
+        
+        st.info(
+        f"""
+        Standard calculators assume markets grow smoothly at **{port_r*100:.1f}% every year**.
+        
+        On a smooth path, your portfolio would reach roughly **€{smooth_balance:,.0f}**.
+        
+        However, real markets fluctuate. Because of this volatility, long-term compounding behaves closer to **{realized_net_growth*100:.1f}%**.
+        
+        Your projection of **€{median[-1]:,.0f}** accounts for this using **{ASSUMPTIONS['simulation']['paths']} simulated market paths**.
+        """
+        )
