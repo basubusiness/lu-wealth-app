@@ -136,15 +136,21 @@ selected_assets = []
 categories = sorted(list(set(d["cat"] for d in ASSETS.values())))
 cols = st.columns(len(categories))
 
+# --- TO BE (Insert this) ---
 for i, cat in enumerate(categories):
     with cols[i]:
         st.markdown(f"### {cat}")
         cat_assets = [name for name, data in ASSETS.items() if data["cat"] == cat]
-        select_all = st.checkbox(f"Select All {cat}", value=True, key=f"all_{cat}")
+        
+        # This Master Toggle now actively controls the 'value' of the loop below
+        master_val = st.checkbox(f"Select All {cat}", value=True, key=f"master_{cat}")
+        
         for asset in cat_assets:
-            if st.checkbox(asset, value=select_all, key=f"check_{asset}"):
+            # By setting value=master_val, the child checkbox is forced to 
+            # sync whenever the master toggle changes.
+            if st.checkbox(asset, value=master_val, key=f"asset_{asset}"):
                 selected_assets.append(asset)
-
+                
 # 1. Trigger calculation and store in Session State
 if st.button("Build Plan") and selected_assets:
     w, port_r, port_v = optimize_portfolio(selected_assets, target)
