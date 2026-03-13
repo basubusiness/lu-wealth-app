@@ -63,7 +63,7 @@ def build_corr(selected):
                 mat.loc[a,b] = CORR_RULES.get(key, 0.3)
     return mat.astype(float)
 
-def optimize_portfolio(names, target):
+def optimize_portfolio(names, target_r):
     original_returns = np.array([ASSETS[a]["return"] for a in names])
     vols = np.array([ASSETS[a]["vol"] for a in names])
     shrink = ASSUMPTIONS["optimizer"]["return_shrinkage"]
@@ -71,21 +71,29 @@ def optimize_portfolio(names, target):
     
     corr = build_corr(names).values
     cov = np.diag(vols) @ corr @ np.diag(vols)
-    
-    # 1. Keep the constraints as defined (including the return target)
-    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0},
-                   {"type": "ineq", "fun": lambda w: w @ rets - target}]
-    
-    # 2. Pass the 'constraints' variable into the minimize function
+
+    # Internal objective to handle soft-constraints and Sharpe maximization
+    def objective(w, c, r, t):
+        port_return = w @ r
+        port_vol = np.sqrt(w.T @ c @ w) + 1e-6
+        # Sharpe Ratio Component
+        sharpe_loss = -(port_return / port_vol)
+        # One-sided penalty: Only triggers if port_return < target_r
+        target_penalty = 15.0 * np.maximum(0, t - port_return)**2 
+        # Diversification penalty
+        div_penalty = 0.05 * np.sum(w**2)
+        return sharpe_loss + target_penalty + div_penalty
+
     res = minimize(
-        lambda w, c, r: -(w @ r) / (np.sqrt(w.T @ c @ w) + 1e-6) + 0.05 * np.sum(w**2),
+        objective,
         np.ones(len(names)) / len(names), 
-        args=(cov, rets), 
-        bounds=[(0, 0.45)] * len(names), # Set floor to 0 to allow the target constraint room to breathe
-        constraints=constraints 
-    )    
-    w = res.x
-    w[w < 0.002] = 0
+        args=(cov, rets, target_r), 
+        bounds=[(0, 0.40)] * len(names), # Max 40% per asset for cleaner looks
+        constraints=[{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    )
+    
+    w = np.round(res.x, 4)
+    w[w < 0.01] = 0 # Clean up dust
     if np.sum(w) > 0: w = w / np.sum(w)
     return w, w @ rets, np.sqrt(w.T @ cov @ w)
 
