@@ -79,6 +79,18 @@ CORR_RULES = {
     ("Cash", "Cash"): 1.0
 }
 
+# --- GLOBAL INITIALIZATION (Place this at the top of your script) ---
+if "param_overrides" not in st.session_state:
+    st.session_state["param_overrides"] = {
+        a: {"return": ASSETS[a]["return"], "vol": ASSETS[a]["vol"]} 
+        for a in ASSETS.keys()
+    }
+
+if "init" not in st.session_state:
+    for a in ASSETS.keys(): st.session_state[f"asset_{a}"] = True
+    for c in set(d["cat"] for d in ASSETS.values()): st.session_state[f"master_{c}"] = True
+    st.session_state["init"] = True
+    
 ASSUMPTIONS = {"optimizer":{"return_shrinkage":0.4, "div_penalty":0.02, "max_asset_weight":0.4}, "simulation":{"paths":2000}}
 
 def build_corr(selected):
@@ -287,49 +299,37 @@ if 'results' in st.session_state:
             "Buy/Sell": "€{:,.0f}"
         }), use_container_width=True)
 
-    with tab5:
-        st.header("Tactical Engine Overrides")
-        
-        # --- Part A: Return & Volatility Sliders ---
-        st.subheader("Asset Expected Returns & Volatility")
-        st.info("Adjust the return/risk profile for each asset. These values persist in your session.")
+with tab5:
+    st.header("Tactical Engine Overrides")
+    st.info("Adjust asset DNA. Changes persist and affect the 'Build Plan' calculation.")
+
+    # Show sliders for currently selected assets
+    for asset in selected_assets:
+        with st.expander(f"Edit {asset} Parameters", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                # We use the key to link the slider directly to session state
+                st.session_state["param_overrides"][asset]["return"] = st.slider(
+                    "Return (%)", 0.0, 20.0, 
+                    float(st.session_state["param_overrides"][asset]["return"] * 100), 
+                    0.5, key=f"ret_slider_{asset}"
+                ) / 100
+            with c2:
+                st.session_state["param_overrides"][asset]["vol"] = st.slider(
+                    "Volatility (%)", 0.0, 50.0, 
+                    float(st.session_state["param_overrides"][asset]["vol"] * 100), 
+                    0.5, key=f"vol_slider_{asset}"
+                ) / 100
+
+    st.divider()
+    st.subheader("Correlation Matrix (Editable)")
     
-        # Initialize overrides in state if they don't exist
-        if "param_overrides" not in st.session_state:
-            # Clone the defaults from your ASSETS dict
-            st.session_state["param_overrides"] = {
-                a: {"return": ASSETS[a]["return"], "vol": ASSETS[a]["vol"]} 
-                for a in ASSETS.keys()
-            }
+    current_selected = sorted(selected_assets)
+    if "corr_override" not in st.session_state or st.session_state.get("last_selected_corr") != current_selected:
+        st.session_state["corr_override"] = build_corr(current_selected)
+        st.session_state["last_selected_corr"] = current_selected
     
-        for asset in selected_assets:
-            with st.expander(f"Edit Parameters: {asset}", expanded=False):
-                c1, c2 = st.columns(2)
-                with c1:
-                    # Return Slider
-                    st.session_state["param_overrides"][asset]["return"] = st.slider(
-                        f"{asset} Return (%)", 0.0, 20.0, 
-                        float(st.session_state["param_overrides"][asset]["return"] * 100), 
-                        0.5, key=f"ret_{asset}"
-                    ) / 100
-                with c2:
-                    # Volatility Slider
-                    st.session_state["param_overrides"][asset]["vol"] = st.slider(
-                        f"{asset} Volatility (%)", 0.0, 50.0, 
-                        float(st.session_state["param_overrides"][asset]["vol"] * 100), 
-                        0.5, key=f"vol_{asset}"
-                    ) / 100
-    
-        st.divider()
-    
-        # --- Part B: Correlation Matrix (Editable) ---
-        st.subheader("Correlation Matrix (Editable)")
-        current_selected = sorted(selected_assets)
-        if "corr_override" not in st.session_state or st.session_state.get("last_selected_corr") != current_selected:
-            st.session_state["corr_override"] = build_corr(current_selected)
-            st.session_state["last_selected_corr"] = current_selected
-        
-        st.session_state["corr_override"] = st.data_editor(
-            st.session_state["corr_override"], 
-            use_container_width=True
-        )
+    st.session_state["corr_override"] = st.data_editor(
+        st.session_state["corr_override"], 
+        use_container_width=True
+    )
