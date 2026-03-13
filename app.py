@@ -4,7 +4,7 @@ import pandas as pd
 from scipy.optimize import minimize
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="LU Wealth Architect", layout="wide")
+st.set_page_config(page_title="Shreeyanee - श्रीयनी", layout="wide")
 
 # ---------------------------------------------------
 # CARD STYLE (Original) 
