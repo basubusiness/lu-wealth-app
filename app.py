@@ -329,7 +329,9 @@ if "corr_override" in st.session_state:
 # RUN MODEL
 # ---------------------------------------------------
 
-if st.button("Build Plan"):
+run_model = st.button("Build Plan")
+
+if run_model:
 
     w, port_r, port_v = optimize_portfolio(assets, target)
 
@@ -354,6 +356,20 @@ if st.button("Build Plan"):
 
     plan = plan[plan["Weight"] > 0.01]
 
+    st.session_state["plan_data"] = {
+        "plan": plan,
+        "median": median,
+        "best": best,
+        "worst": worst,
+        "paths": paths,
+        "years_axis": years_axis,
+        "port_r": port_r,
+        "port_v": port_v,
+        "growth_value": growth_value,
+        "monthly_income": monthly_income,
+        "tipping": tipping,
+        "total_invested": total_invested
+    }
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Plan", "Projection", "Risk", "Rebalance", "Engine"])
 
 # ---------------------------------------------------
