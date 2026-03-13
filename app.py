@@ -157,7 +157,7 @@ def simulate(mu, sigma, years, start, monthly, growth):
 # ---------------------------------------------------
 # UI
 # ---------------------------------------------------
-st.title("LU Wealth Architect")
+st.title("Shreeyanee - श्रीयनी")
 
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1: initial = st.number_input("Initial Capital", 10000, 5000000, 100000)
