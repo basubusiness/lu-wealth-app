@@ -34,20 +34,37 @@ st.markdown("""
 # ASSETS & LOGIC (Original)
 # ---------------------------------------------------
 ASSETS = {
+
+    # Equities
     "World Equity":{"return":0.075,"vol":0.16,"cat":"Equity"},
     "US Equity":{"return":0.078,"vol":0.17,"cat":"Equity"},
     "Emerging Markets":{"return":0.08,"vol":0.22,"cat":"Equity"},
+    "Global Small Cap":{"return":0.082,"vol":0.19,"cat":"Equity"},
+
+    # Real Assets
     "Global REIT":{"return":0.065,"vol":0.18,"cat":"Real"},
+    "Gold":{"return":0.065,"vol":0.17,"cat":"Real"},
+    "Broad Commodities":{"return":0.06,"vol":0.20,"cat":"Real"},
+
+    # Bonds
     "Euro Gov Bonds":{"return":0.03,"vol":0.06,"cat":"Bond"},
     "Corp Bonds":{"return":0.035,"vol":0.07,"cat":"Bond"},
-    "Gold":{"return":0.065,"vol":0.17,"cat":"Real"},
+    "Global Inflation Bonds":{"return":0.035,"vol":0.07,"cat":"Bond"},
+
+    # Cash
     "Cash":{"return":0.02,"vol":0.01,"cat":"Cash"}
 }
-
 CORR_RULES = {
-    ("Equity","Equity"):0.85, ("Equity","Bond"):0.2, ("Equity","Real"):0.15,
-    ("Bond","Bond"):0.6, ("Bond","Real"):0.1, ("Real","Real"):0.5,
-    ("Cash","Equity"):0.05, ("Cash","Bond"):0.2, ("Cash","Real"):0.05, ("Cash","Cash"):1.0
+    ("Equity","Equity"):0.85,
+    ("Equity","Bond"):0.2,
+    ("Equity","Real"):0.10,
+    ("Bond","Bond"):0.6,
+    ("Bond","Real"):0.1,
+    ("Real","Real"):0.5,
+    ("Cash","Equity"):0.05,
+    ("Cash","Bond"):0.2,
+    ("Cash","Real"):0.05,
+    ("Cash","Cash"):1.0
 }
 
 ASSUMPTIONS = {"optimizer":{"return_shrinkage":0.4, "div_penalty":0.02, "max_asset_weight":0.4}, "simulation":{"paths":2000}}
