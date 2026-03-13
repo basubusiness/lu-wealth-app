@@ -288,71 +288,178 @@ if len(assets)<2:
     st.stop()
 
 # ---------------------------------------------------
-# BUILD PLAN BUTTON
+# BUILD PLAN
 # ---------------------------------------------------
 
-run=st.button("Build Plan")
+run = st.button("Build Plan")
 
 if run:
 
-    w,port_r,port_v=optimize_portfolio(assets,target)
+    w, port_r, port_v = optimize_portfolio(assets, target)
 
-    paths=simulate(port_r,port_v,years,initial,monthly,growth)
-    worst,median,best=scenario_paths(paths,confidence)
+    paths = simulate(port_r, port_v, years, initial, monthly, growth)
+    worst, median, best = scenario_paths(paths, confidence)
 
-    years_axis=list(range(len(median)))
+    years_axis = list(range(len(median)))
 
-    total_invested=initial+sum([monthly*12*((1+growth)**i) for i in range(years)])
-    growth_value=median[-1]-total_invested
-    monthly_income=median[-1]*port_r/12
+    total_invested = initial + sum([monthly * 12 * ((1 + growth)**i) for i in range(years)])
+    growth_value = median[-1] - total_invested
+    monthly_income = median[-1] * port_r / 12
 
-    tipping=next((i for i,g in enumerate(median*(port_r/12)) if g>=monthly),None)
+    tipping = next((i for i, g in enumerate(median * (port_r / 12)) if g >= monthly), None)
 
-    plan=pd.DataFrame({
-        "Asset":assets,
-        "Weight":w,
-        "Invest Now":w*initial,
-        "Monthly":w*monthly
+    plan = pd.DataFrame({
+        "Asset": assets,
+        "Weight": w,
+        "Invest Now": w * initial,
+        "Monthly": w * monthly
     })
 
-    plan=plan[plan["Weight"]>0.01]
+    plan = plan[plan["Weight"] > 0.01]
 
-    st.session_state["plan_data"]={
-        "plan":plan,
-        "median":median,
-        "best":best,
-        "worst":worst,
-        "paths":paths,
-        "years_axis":years_axis,
-        "port_r":port_r,
-        "port_v":port_v,
-        "growth_value":growth_value,
-        "monthly_income":monthly_income,
-        "tipping":tipping,
-        "total_invested":total_invested
+    st.session_state.plan_data = {
+        "plan": plan,
+        "median": median,
+        "best": best,
+        "worst": worst,
+        "paths": paths,
+        "years_axis": years_axis,
+        "port_r": port_r,
+        "port_v": port_v,
+        "growth_value": growth_value,
+        "monthly_income": monthly_income,
+        "tipping": tipping,
+        "total_invested": total_invested
     }
-
-if "plan_data" not in st.session_state:
-    st.info("Click **Build Plan** to generate your investment plan.")
-    st.stop()
-
-data=st.session_state["plan_data"]
-
-plan=data["plan"]
-median=data["median"]
-best=data["best"]
-worst=data["worst"]
-paths=data["paths"]
-years_axis=data["years_axis"]
-port_r=data["port_r"]
-port_v=data["port_v"]
-growth_value=data["growth_value"]
-monthly_income=data["monthly_income"]
-tipping=data["tipping"]
-total_invested=data["total_invested"]
 
 # ---------------------------------------------------
 # TABS
 # ---------------------------------------------------
 
-tab1,tab2,tab3,tab4,tab5=st.tabs(["Plan","Projection","Risk","Rebalance","Engine"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["Plan", "Projection", "Risk", "Rebalance", "Engine"]
+)
+
+# If user hasn't run the model yet
+if "plan_data" not in st.session_state:
+    with tab1:
+        st.info("Click **Build Plan** to generate your investment plan.")
+    st.stop()
+
+data = st.session_state.plan_data
+
+plan = data["plan"]
+median = data["median"]
+best = data["best"]
+worst = data["worst"]
+paths = data["paths"]
+years_axis = data["years_axis"]
+port_r = data["port_r"]
+port_v = data["port_v"]
+growth_value = data["growth_value"]
+monthly_income = data["monthly_income"]
+tipping = data["tipping"]
+total_invested = data["total_invested"]
+
+# ---------------------------------------------------
+# PLAN TAB
+# ---------------------------------------------------
+
+with tab1:
+
+    st.dataframe(
+        plan.style.format({
+            "Weight": "{:.1%}",
+            "Invest Now": "€{:,.0f}",
+            "Monthly": "€{:,.0f}"
+        }),
+        use_container_width=True
+    )
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+
+    with c1:
+        st.metric("Final Portfolio Value", f"€{median[-1]:,.0f}")
+
+    with c2:
+        st.metric("Typical Yearly Growth", f"{port_r*100:.1f}%")
+
+    with c3:
+        st.metric("Investment Growth", f"€{growth_value:,.0f}")
+
+    with c4:
+        st.metric("Compounding Tipping Point", f"Year {tipping}")
+
+    with c5:
+        st.metric("Est. Monthly Income", f"€{monthly_income:,.0f}")
+
+# ---------------------------------------------------
+# PROJECTION TAB
+# ---------------------------------------------------
+
+with tab2:
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(x=years_axis, y=best, name="Best case"))
+    fig.add_trace(go.Scatter(x=years_axis, y=median, name="Expected"))
+    fig.add_trace(go.Scatter(x=years_axis, y=worst, name="Worst case"))
+
+    st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------------------------------
+# RISK TAB
+# ---------------------------------------------------
+
+with tab3:
+
+    fig = go.Figure()
+
+    fig.add_histogram(
+        x=paths[:, -1],
+        nbinsx=40
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------------------------------
+# REBALANCE TAB
+# ---------------------------------------------------
+
+with tab4:
+
+    st.subheader("Rebalancing calculator")
+
+    current = {}
+
+    for asset in plan["Asset"]:
+        current[asset] = st.number_input(
+            f"Current value {asset}",
+            value=float(plan.loc[plan["Asset"] == asset, "Invest Now"])
+        )
+
+    total_current = sum(current.values())
+
+    target_values = plan["Weight"] * total_current
+
+    rebalance = target_values - list(current.values())
+
+    rebalance_df = pd.DataFrame({
+        "Asset": plan["Asset"],
+        "Target €": target_values,
+        "Current €": list(current.values()),
+        "Buy / Sell €": rebalance
+    })
+
+    st.dataframe(rebalance_df)
+
+# ---------------------------------------------------
+# ENGINE TAB
+# ---------------------------------------------------
+
+with tab5:
+
+    st.subheader("Model assumptions")
+
+    df = pd.DataFrame(ASSETS).T
+    st.dataframe(df)
