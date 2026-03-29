@@ -1870,51 +1870,186 @@ cross-asset correlations floored at {ASSUMPTIONS['crisis_regime']['corr_floor']}
     # ── TAB 4: REBALANCE ─────────────────────────────────────
     with tab_reb:
         st.subheader("Portfolio Alignment & Drift Monitor")
+
+        # ── Source selection ──────────────────────────────────
+        holdings = st.session_state.get("etf_holdings", [])
+        active_plan = plan_df[plan_df["Weight"] > 0.005]
+
+        has_holdings = len(holdings) > 0
+        if has_holdings:
+            # Aggregate holdings by asset class
+            h_df = pd.DataFrame(holdings)
+            h_agg = h_df.groupby("Asset Class")["Value (EUR)"].sum()
+            total_held = h_agg.sum()
+
+            st.success(
+                f"Using **{len(holdings)} ETF holdings** from the ETF Lookup tab "
+                f"(total: **€{total_held:,.0f}**) — mapped to model asset classes. "
+                f"Add more holdings in the ETF Lookup tab to improve accuracy."
+            )
+            source_mode = st.radio(
+                "Current portfolio values from:",
+                ["📂 My ETF holdings (from ETF Lookup tab)", "✏️ Manual entry"],
+                horizontal=True, key="reb_source"
+            )
+        else:
+            st.info(
+                "No holdings added yet. Go to the **ETF Lookup** tab to add your ETFs, "
+                "or use manual entry below."
+            )
+            source_mode = "✏️ Manual entry"
+
         st.markdown(f"""
 <div class="rebal-note">
-Rebalance is flagged when an asset drifts more than
+Rebalance triggered when drift exceeds
 <b>{int(ASSUMPTIONS['rebalance_drift_threshold']*100)}%</b>
-from its target weight. This is a rules-based trigger — not a market call.
+from target. Rules-based — not a market call.
+Comparing against: <b>{active_label}</b> portfolio.
 </div>
 """, unsafe_allow_html=True)
 
-        active_plan = plan_df[plan_df["Weight"] > 0.005]
-
-        with st.form("rebalance_form"):
+        # ── Build current_vals from source ────────────────────
+        if has_holdings and "My ETF" in source_mode:
+            # Auto-populate from holdings — map asset class to current value
             current_vals = {}
-            cols_reb = st.columns(2)
-            for i, row in enumerate(active_plan.itertuples()):
-                with cols_reb[i % 2]:
-                    current_vals[row.Asset] = st.number_input(
-                        f"Current value of {row.Asset} (€)",
-                        value=float(row._4),   # Invest Now
-                        min_value=0.0,
-                        key=f"rebal_{row.Asset}"
-                    )
-            submitted = st.form_submit_button("Calculate Rebalance")
+            for _, row in active_plan.iterrows():
+                ac = row["Asset"]
+                current_vals[ac] = float(h_agg.get(ac, 0.0))
 
-        if submitted:
+            # Show what was pulled in
+            st.markdown("**Holdings mapped to model asset classes:**")
+            mapped_df = pd.DataFrame([
+                {"Asset Class": ac, "Value from holdings": current_vals[ac],
+                 "Source ETFs": ", ".join(
+                     h["Name"] for h in holdings if h["Asset Class"] == ac
+                 ) or "—"}
+                for ac in active_plan["Asset"].values
+            ])
+            unmapped = [
+                h["Name"] for h in holdings
+                if h["Asset Class"] not in active_plan["Asset"].values
+            ]
+            st.dataframe(
+                mapped_df.style.format({"Value from holdings": "€{:,.0f}"}),
+                use_container_width=True, hide_index=True
+            )
+            if unmapped:
+                st.warning(
+                    f"These holdings are not in your active model portfolio and are excluded: "
+                    f"**{', '.join(unmapped)}**. "
+                    f"Either add their asset class to the model or change the active portfolio."
+                )
+            do_rebalance = st.button("Calculate Rebalance", key="reb_auto_btn")
+
+        else:
+            # Manual entry form — pre-fill with model Invest Now amounts
+            with st.form("rebalance_form"):
+                current_vals = {}
+                cols_reb = st.columns(2)
+                for i, row in enumerate(active_plan.itertuples()):
+                    with cols_reb[i % 2]:
+                        current_vals[row.Asset] = st.number_input(
+                            f"{row.Asset} (€)",
+                            value=float(row._4),
+                            min_value=0.0,
+                            key=f"rebal_{row.Asset}"
+                        )
+                do_rebalance = st.form_submit_button("Calculate Rebalance")
+
+        # ── Run rebalance logic ───────────────────────────────
+        if (has_holdings and "My ETF" in source_mode and do_rebalance) or            (source_mode == "✏️ Manual entry" and do_rebalance):
+
             reb_df = rebalance_triggers(
                 active_plan["Weight"].values,
                 active_plan["Asset"].values,
                 current_vals
             )
             total_curr = sum(current_vals.values())
-            st.caption(f"Total portfolio value: **€{total_curr:,.0f}**")
-            st.dataframe(
-                reb_df.style.format({
-                    "Target %":   "{:.1%}",
-                    "Current %":  "{:.1%}",
-                    "Drift":      "{:+.1%}",
-                    "Buy / Sell €": "€{:+,.0f}",
-                }).applymap(
-                    lambda v: "background-color:#1a0a0a;color:#fca5a5" if v == "YES" else "",
-                    subset=["⚠️ Rebalance"]
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-            st.caption("Positive Buy/Sell = buy more. Negative = sell/trim.")
+
+            st.divider()
+            col_r1, col_r2 = st.columns([3, 2])
+            with col_r1:
+                st.caption(
+                    f"Total current portfolio: **€{total_curr:,.0f}** | "
+                    f"Target: **{active_label}** | "
+                    f"Drift threshold: {int(ASSUMPTIONS['rebalance_drift_threshold']*100)}%"
+                )
+                reb_flagged = reb_df[reb_df["⚠️ Rebalance"] == "YES"]
+                if len(reb_flagged) == 0:
+                    st.success("✅ Portfolio is within drift thresholds — no rebalance needed.")
+                else:
+                    st.warning(f"⚠️ {len(reb_flagged)} asset(s) need rebalancing.")
+
+                st.dataframe(
+                    reb_df.style.format({
+                        "Target %":     "{:.1%}",
+                        "Current %":    "{:.1%}",
+                        "Drift":        "{:+.1%}",
+                        "Buy / Sell €": "€{:+,.0f}",
+                    }).applymap(
+                        lambda v: "background-color:#1a0a0a;color:#fca5a5" if v == "YES" else "",
+                        subset=["⚠️ Rebalance"]
+                    ),
+                    use_container_width=True, hide_index=True,
+                )
+                st.caption(
+                    "**Buy / Sell €**: positive = buy more, negative = trim. "
+                    "Amounts are at the asset-class level — split across your ETFs within each class as you see fit."
+                )
+
+            with col_r2:
+                # Drift waterfall chart
+                reb_plot = reb_df[reb_df["Buy / Sell €"].abs() > 10].copy()
+                if not reb_plot.empty:
+                    fig_reb = go.Figure(go.Bar(
+                        x=reb_plot["Asset"],
+                        y=reb_plot["Buy / Sell €"],
+                        marker=dict(
+                            color=["#4ade80" if v > 0 else "#ef4444"
+                                   for v in reb_plot["Buy / Sell €"]],
+                            opacity=0.85,
+                        ),
+                        text=[f"€{v:+,.0f}" for v in reb_plot["Buy / Sell €"]],
+                        textposition="outside",
+                    ))
+                    fig_reb.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#94a3b8", size=11),
+                        yaxis=dict(tickprefix="€", gridcolor="#1e2130"),
+                        xaxis=dict(gridcolor="#1e2130"),
+                        height=320,
+                        margin=dict(t=20, b=20, l=10, r=10),
+                        title=dict(text="Buy / Sell by Asset Class", font=dict(size=12)),
+                    )
+                    st.plotly_chart(fig_reb, use_container_width=True)
+
+            # Monthly contribution split
+            if monthly > 0:
+                st.divider()
+                st.markdown("**Allocate this month's savings:**")
+                monthly_alloc = []
+                for _, row in active_plan.iterrows():
+                    amt = row["Weight"] * monthly
+                    if amt > 1:
+                        # If asset is underweight, direct more savings there
+                        drift_row = reb_df[reb_df["Asset"] == row["Asset"]]
+                        is_under = (not drift_row.empty and
+                                    drift_row["Buy / Sell €"].values[0] > 0)
+                        monthly_alloc.append({
+                            "Asset":      row["Asset"],
+                            "Base (€/mo)": amt,
+                            "Priority":   "⬆️ Underweight — add here first" if is_under else "—",
+                        })
+                alloc_df = pd.DataFrame(monthly_alloc)
+                st.dataframe(
+                    alloc_df.style.format({"Base (€/mo)": "€{:,.0f}"}),
+                    use_container_width=True, hide_index=True
+                )
+                st.caption(
+                    f"Your €{monthly:,.0f}/mo contribution split by target weight. "
+                    f"Prioritise underweight assets to rebalance gradually without selling."
+                )
 
     # ── TAB 5: ENGINE ─────────────────────────────────────────
     # ── TAB: ETF LOOKUP ──────────────────────────────────────────
@@ -1923,7 +2058,7 @@ from its target weight. This is a rules-based trigger — not a market call.
         st.caption(
             "Search by ISIN or name. We attempt to fetch key data from justETF. "
             "If lookup fails, a direct link is provided so you can fill in details manually. "
-            "This builds your holdings list — future versions will use this for rebalancing."
+            "Holdings added here automatically populate the Rebalance tab."
         )
 
         # Holdings store in session state
