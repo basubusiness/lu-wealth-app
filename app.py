@@ -880,8 +880,31 @@ def find_alternative_portfolios(names, target_r, n_alternatives=6, sharpe_tol=0.
         if not kept:
             kept.append(c); continue
         min_dist = min(np.sum(np.abs(c["weights"] - k["weights"])) for k in kept)
-        if min_dist > 0.10:
+        if min_dist > 0.15:  # tighter — if two non-priority portfolios are this similar, drop one
             kept.append(c)
+
+    # Post-dedup: ensure all labels are unique
+    # If two portfolios ended up with the same dynamic label, use the
+    # philosophy-based fallback for the lower-Sharpe one
+    PHILOSOPHY_FALLBACK = {
+        "max_efficiency":    "★ Max Efficiency",
+        "defensive":         "Defensive",
+        "equity_growth":     "Equity Growth",
+        "balanced":          "Balanced",
+        "real_assets_sharpe":"Real Asset Tilt",
+        "max_diversified":   "Max Diversified",
+        "alt_satellite":     "Alt Satellite",
+        "moonshot":          "Moonshot",
+        "inflation_hedge":   "Inflation Hedge",
+        "ultra_spicy":       "Ultra Spicy",
+    }
+    seen_labels = {}
+    for c in sorted(kept, key=lambda x: -x["sharpe"]):
+        lbl = c["label"]
+        if lbl in seen_labels:
+            # Duplicate — use the philosophy name as the unique label
+            c["label"] = PHILOSOPHY_FALLBACK.get(c.get("philosophy", ""), lbl + " (alt)")
+        seen_labels[c["label"]] = True
 
     return sorted(kept, key=lambda x: -x["sharpe"])
 
