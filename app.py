@@ -1378,9 +1378,55 @@ if "results" in st.session_state:
     real_invested  = total_invested / ((1 + inflation) ** years) if show_real else total_invested
     med_final      = p50_b[-1]
     swr            = ASSUMPTIONS["safe_withdrawal_rate"]
-    monthly_income = med_final * swr / 12
-    tipping        = next((i for i in range(1, years + 1)
-                           if p50_b[i] * swr / 12 >= monthly), None)
+
+    # Withdrawal mode toggle — sits above the metrics cards
+    withdrawal_mode = st.radio(
+        "Withdrawal mode",
+        ["🏦 Preserve capital (SWR 4%)", "📉 Spend it all (drawdown over N years)"],
+        horizontal=True,
+        key="withdrawal_mode",
+        help=(
+            "Preserve capital: withdraw 4% per year indefinitely — principal stays intact and keeps growing. "
+            "Spend it all: consume the full portfolio over a set number of years. "
+            "Higher monthly income but nothing left at the end."
+        )
+    )
+
+    if "Preserve" in withdrawal_mode:
+        monthly_income     = med_final * swr / 12
+        income_label       = f"Monthly income ({int(swr*100)}% SWR, capital preserved)"
+        income_tooltip     = (
+            f"SWR = Safe Withdrawal Rate. Withdraw {int(swr*100)}% per year — "
+            f"portfolio keeps growing and is never fully consumed. "
+            f"Sustainable indefinitely if returns hold."
+        )
+        tipping = next((i for i in range(1, years + 1)
+                        if p50_b[i] * swr / 12 >= monthly), None)
+    else:
+        drawdown_years = st.slider(
+            "Spend over how many years?", 5, 40, 25,
+            help="How many years do you want the portfolio to last after you stop contributing. "
+                 "25 years = retire at 65, run out at 90.",
+            key="drawdown_years"
+        )
+        # Simple annuity: level drawdown ignoring growth (conservative)
+        # More accurate: PMT formula accounting for portfolio return during drawdown
+        dr = port_r_active  # portfolio still earns during drawdown phase
+        if dr > 0:
+            # PMT = PV * r / (1 - (1+r)^-n)  where r = annual, n = years
+            ann_r = dr
+            monthly_income = med_final * (ann_r/12) / (1 - (1 + ann_r/12)**(-drawdown_years*12))
+        else:
+            monthly_income = med_final / (drawdown_years * 12)
+        income_label   = f"Monthly income (spend all over {drawdown_years}y)"
+        income_tooltip = (
+            f"Draws down the full portfolio over {drawdown_years} years using an annuity formula "
+            f"(assumes portfolio earns {port_r_active*100:.1f}% during drawdown). "
+            f"Nothing left at the end. Use the SWR mode if you want to preserve capital."
+        )
+        tipping = next((i for i in range(1, years + 1)
+                        if p50_b[i] / (drawdown_years * 12) >= monthly), None)
+
     # Use active portfolio values throughout
     port_r  = port_r_active
     port_v  = port_v_active
@@ -1401,8 +1447,8 @@ if "results" in st.session_state:
 | **Compounding tipping point** | The year when your portfolio's investment return (at SWR) first exceeds your monthly savings contribution. |
 | **Nominal vs Real** | Nominal = future euros as a number. Real = adjusted for inflation, showing today's purchasing power equivalent. |
 """)
-    tab_plan, tab_proj, tab_risk, tab_reb, tab_engine = st.tabs([
-        "📐 Plan", "📈 Projection", "🛡️ Risk", "⚖️ Rebalance", "⚙️ Engine"
+    tab_plan, tab_proj, tab_risk, tab_reb, tab_etf, tab_engine = st.tabs([
+        "📐 Plan", "📈 Projection", "🛡️ Risk", "⚖️ Rebalance", "🔍 ETF Lookup", "⚙️ Engine"
     ])
 
     # ── TAB 1: PLAN ──────────────────────────────────────────
@@ -1489,9 +1535,9 @@ if "results" in st.session_state:
                 ),
                 (
                     f"€{monthly_income:,.0f}/mo",
-                    f"Safe withdrawal income ({int(swr*100)}% SWR)",
+                    income_label,
                     "",
-                    f"SWR = Safe Withdrawal Rate. If your portfolio is worth X at retirement, you can withdraw {int(swr*100)}% per year (X × 0.04 ÷ 12 monthly) without depleting it over a 30-year horizon — based on Bengen (1994). You keep the rest invested so it keeps growing. Does NOT include taxes or withdrawal-phase sequence risk. Many planners use 3–3.5% for extra safety."
+                    income_tooltip
                 ),
                 (
                     f"Year {tipping}" if tipping else ">horizon",
@@ -1859,6 +1905,208 @@ from its target weight. This is a rules-based trigger — not a market call.
             st.caption("Positive Buy/Sell = buy more. Negative = sell/trim.")
 
     # ── TAB 5: ENGINE ─────────────────────────────────────────
+    # ── TAB: ETF LOOKUP ──────────────────────────────────────────
+    with tab_etf:
+        st.subheader("ETF Lookup & Holdings Builder")
+        st.caption(
+            "Search by ISIN or name. We attempt to fetch key data from justETF. "
+            "If lookup fails, a direct link is provided so you can fill in details manually. "
+            "This builds your holdings list — future versions will use this for rebalancing."
+        )
+
+        # Holdings store in session state
+        if "etf_holdings" not in st.session_state:
+            st.session_state["etf_holdings"] = []
+
+        col_srch1, col_srch2 = st.columns([3, 1])
+        with col_srch1:
+            etf_query = st.text_input(
+                "ISIN or ETF name",
+                placeholder="e.g. IE00B4L5Y983 or IWDA",
+                key="etf_search_input"
+            )
+        with col_srch2:
+            do_search = st.button("🔍 Look up", key="etf_search_btn")
+
+        if do_search and etf_query.strip():
+            query = etf_query.strip()
+            isin_like = len(query) >= 10 and query[:2].isalpha() and query[2:].replace('-','').isalnum()
+
+            with st.spinner("Fetching from justETF..."):
+                import urllib.request, urllib.parse, json, re as _re
+
+                result = {"success": False, "name": None, "ter": None,
+                          "index": None, "asset_class": None, "isin": query,
+                          "url": None}
+
+                # Build justETF search URL
+                if isin_like:
+                    search_url = f"https://www.justetf.com/en/etf-profile.html?isin={query}"
+                    result["url"] = search_url
+                else:
+                    enc = urllib.parse.quote(query)
+                    search_url = f"https://www.justetf.com/en/search.html?search=ETF&query={enc}"
+                    result["url"] = search_url
+
+                try:
+                    req = urllib.request.Request(
+                        search_url,
+                        headers={"User-Agent": "Mozilla/5.0"}
+                    )
+                    with urllib.request.urlopen(req, timeout=6) as resp:
+                        html = resp.read().decode("utf-8", errors="ignore")
+
+                    # Extract name
+                    m = _re.search(r'<h1[^>]*class="[^"]*h2[^"]*"[^>]*>([^<]+)</h1>', html)
+                    if not m:
+                        m = _re.search(r'<title>([^|<]+)', html)
+                    if m:
+                        result["name"] = m.group(1).strip()
+                        result["success"] = True
+
+                    # Extract TER
+                    m_ter = _re.search(r'([0-9]+\.[0-9]+)\s*%.*?(?:TER|total expense)', html, _re.IGNORECASE)
+                    if m_ter:
+                        result["ter"] = float(m_ter.group(1))
+
+                    # Guess asset class from name/content
+                    html_lower = html.lower()
+                    if any(x in html_lower for x in ["government bond", "treasury", "gilt", "bund"]):
+                        result["asset_class"] = "Euro Gov Bonds"
+                    elif any(x in html_lower for x in ["corporate bond", "credit"]):
+                        result["asset_class"] = "Corp Bonds"
+                    elif any(x in html_lower for x in ["inflation", "tips", "linker"]):
+                        result["asset_class"] = "Global Inflation Bonds"
+                    elif any(x in html_lower for x in ["emerging market", "msci em"]):
+                        result["asset_class"] = "Emerging Markets"
+                    elif any(x in html_lower for x in ["world", "global", "all country", "acwi", "ftse all"]):
+                        result["asset_class"] = "World Equity"
+                    elif any(x in html_lower for x in ["s&p 500", "nasdaq", "russell", "united states", "us equity"]):
+                        result["asset_class"] = "US Equity"
+                    elif any(x in html_lower for x in ["europe", "stoxx", "eurostoxx"]):
+                        result["asset_class"] = "Europe Equity"
+                    elif any(x in html_lower for x in ["japan", "pacific", "asia pacific"]):
+                        result["asset_class"] = "Japan / Pacific"
+                    elif any(x in html_lower for x in ["reit", "real estate", "property"]):
+                        result["asset_class"] = "Global REIT"
+                    elif any(x in html_lower for x in ["gold", "precious metal"]):
+                        result["asset_class"] = "Gold"
+                    elif any(x in html_lower for x in ["commodity", "commodities"]):
+                        result["asset_class"] = "Broad Commodities"
+                    elif any(x in html_lower for x in ["semiconductor", "technology", "tech"]):
+                        result["asset_class"] = "Semiconductors"
+                    elif any(x in html_lower for x in ["uranium", "nuclear"]):
+                        result["asset_class"] = "Uranium / Nuclear"
+                    elif any(x in html_lower for x in ["small cap", "small-cap"]):
+                        result["asset_class"] = "Global Small Cap"
+
+                except Exception as e:
+                    result["error"] = str(e)
+
+            # Show result
+            if result["success"]:
+                st.success(f"Found: **{result['name']}**")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("ISIN", result["isin"])
+                with c2:
+                    st.metric("TER", f"{result['ter']}%" if result["ter"] else "—")
+                with c3:
+                    st.metric("Suggested mapping", result["asset_class"] or "Unknown")
+            else:
+                st.warning(
+                    f"Could not auto-fetch data for **{query}**. "
+                    f"Fill in manually below, or "
+                    f"[view on justETF]({result['url']}) to get the details."
+                )
+
+            # Manual entry form (pre-filled where possible)
+            st.markdown("**Add to holdings:**")
+            with st.form("etf_add_form"):
+                fc1, fc2, fc3, fc4 = st.columns([3, 2, 2, 2])
+                with fc1:
+                    f_name  = st.text_input("Name / Ticker", value=result.get("name") or query)
+                with fc2:
+                    f_isin  = st.text_input("ISIN", value=result.get("isin", ""))
+                with fc3:
+                    ac_opts = list(ASSETS.keys())
+                    default_ac = result.get("asset_class")
+                    default_idx = ac_opts.index(default_ac) if default_ac in ac_opts else 0
+                    f_ac = st.selectbox("Maps to asset class", ac_opts, index=default_idx)
+                with fc4:
+                    f_val = st.number_input("Current value (EUR)", min_value=0.0, value=0.0, step=100.0)
+                submitted = st.form_submit_button("Add to holdings")
+                if submitted and f_name:
+                    st.session_state["etf_holdings"].append({
+                        "Name": f_name, "ISIN": f_isin,
+                        "Asset Class": f_ac, "Value (EUR)": f_val
+                    })
+                    st.success(f"Added {f_name}")
+
+        # Show current holdings
+        if st.session_state["etf_holdings"]:
+            st.divider()
+            st.markdown("**Your Holdings**")
+            holdings_df = pd.DataFrame(st.session_state["etf_holdings"])
+            total_h = holdings_df["Value (EUR)"].sum()
+
+            # Allow deletion
+            del_idx = st.multiselect(
+                "Select rows to remove",
+                options=list(range(len(holdings_df))),
+                format_func=lambda i: st.session_state["etf_holdings"][i]["Name"],
+                key="etf_del"
+            )
+            if st.button("Remove selected", key="etf_del_btn") and del_idx:
+                st.session_state["etf_holdings"] = [
+                    h for i, h in enumerate(st.session_state["etf_holdings"])
+                    if i not in del_idx
+                ]
+                st.rerun()
+
+            st.dataframe(
+                holdings_df.style.format({"Value (EUR)": "EUR {:,.0f}"}),
+                use_container_width=True, hide_index=True
+            )
+            st.caption(f"Total portfolio value: **EUR {total_h:,.0f}**")
+
+            # Aggregate by asset class vs model target
+            agg = holdings_df.groupby("Asset Class")["Value (EUR)"].sum()
+            agg_pct = agg / total_h
+
+            # Compare to active portfolio target
+            target_w = dict(zip(assets, w))
+            st.markdown("**Holdings vs Model Target**")
+            rows = []
+            all_classes = sorted(set(list(agg_pct.index) + list(target_w.keys())))
+            for ac in all_classes:
+                actual = float(agg_pct.get(ac, 0.0))
+                target_wt = float(target_w.get(ac, 0.0)) if target_w.get(ac, 0.0) > 0.005 else 0.0
+                drift = actual - target_wt
+                rows.append({
+                    "Asset Class": ac,
+                    "You hold": actual,
+                    "Model target": target_wt,
+                    "Drift": drift,
+                })
+            drift_df = pd.DataFrame(rows)
+            drift_df = drift_df[drift_df[["You hold","Model target"]].max(axis=1) > 0.001]
+            st.dataframe(
+                drift_df.style.format({
+                    "You hold": "{:.1%}",
+                    "Model target": "{:.1%}",
+                    "Drift": "{:+.1%}",
+                }).bar(subset=["Drift"], align="zero", color=["#7f1d1d","#14532d"]),
+                use_container_width=True, hide_index=True
+            )
+            st.caption(
+                "Drift = your actual exposure minus model target. "
+                "Green = underweight (buy more). Red = overweight (trim). "
+                "Full rebalance signals coming in next version."
+            )
+        else:
+            st.info("No holdings added yet. Search for an ETF above to get started.")
+
     with tab_engine:
         st.header("Engine Room — Advanced Overrides")
         st.caption("Changes here take effect on the next 'Build Plan' run.")
