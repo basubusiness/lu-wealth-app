@@ -219,19 +219,24 @@ def build_corr(selected):
     return mat
 
 
-def get_scenario_returns(names, scenario):
+def get_base_returns(names):
+    """Always use base (unscaled) returns for optimization."""
     df = st.session_state["asset_settings"].set_index("Asset")
-    raw = df.loc[names, "return"].values.astype(float)
-    scale = ASSUMPTIONS["return_scenarios"][scenario]
-    return raw * scale
+    return df.loc[names, "return"].values.astype(float)
 
 
 def optimize_portfolio(names, target_r, scenario):
+    """
+    Optimization always runs on BASE returns.
+    Scenario scaling is applied only to the simulation mu so that
+    portfolio structure is stable across scenarios while wealth
+    projections reflect the user's return belief.
+    """
     df = st.session_state["asset_settings"].set_index("Asset")
     vols = df.loc[names, "vol"].values.astype(float)
-    raw_rets = get_scenario_returns(names, scenario)
+    raw_rets = get_base_returns(names)
 
-    # --- Proper shrinkage from ASSUMPTIONS ---
+    # --- Proper shrinkage from ASSUMPTIONS (0.40 = meaningful regularisation) ---
     shrink = ASSUMPTIONS["optimizer"]["return_shrinkage"]
     rets = shrink * np.mean(raw_rets) + (1 - shrink) * raw_rets
 
@@ -316,7 +321,7 @@ def sensitivity_analysis(names, target_r, scenario, years, initial, monthly, con
         df["return"] = df["return"] + delta
         orig = st.session_state["asset_settings"].copy()
         st.session_state["asset_settings"] = df.reset_index().rename(columns={"index": "Asset"})
-        w, mu, sigma = optimize_portfolio(names, target_r + delta, scenario)
+        w, mu, sigma = optimize_portfolio(names, target_r + delta, "Base")
         st.session_state["asset_settings"] = orig
         if w is not None:
             paths = simulate_paths(mu, sigma, years, initial, monthly, contrib_growth)
@@ -375,21 +380,21 @@ with st.expander("📋 Model Assumptions & Limitations — read before trusting 
 # INPUTS
 # ============================================================
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-with c1: initial   = st.number_input("Initial Capital (€)", 10_000, 5_000_000, 100_000, step=5_000)
-with c2: monthly   = st.number_input("Monthly Saving (€)",  0, 50_000, 3_000, step=100)
-with c3: years     = st.slider("Horizon (years)", 1, 40, 20)
-with c4: target_pct = st.number_input("Target Return %", 2.0, 14.0, 6.5, step=0.5)
-with c5: growth_pct = st.slider("Saving Growth %/yr", 0, 10, 3)
+with c1: initial   = st.number_input("Initial Capital (€)", 10_000, 5_000_000, 100_000, step=5_000, help="Lump sum invested on day one.")
+with c2: monthly   = st.number_input("Monthly Saving (€)",  0, 50_000, 3_000, step=100, help="Regular monthly contribution, assumed invested at start of each year.")
+with c3: years     = st.slider("Horizon (years)", 1, 40, 20, help="Investment horizon. Longer horizons reduce sequence-of-returns risk.")
+with c4: target_pct = st.number_input("Target Return %", 2.0, 14.0, 6.5, step=0.5, help="Minimum annualised nominal return the optimiser must achieve. Higher targets force more risk.")
+with c5: growth_pct = st.slider("Saving Growth %/yr", 0, 10, 3, help="Annual step-up in monthly savings (e.g. salary growth). 0 = flat contributions forever.")
 with c6:
-    inflation_pct = st.number_input("Inflation %", 0.5, 6.0, 2.0, step=0.1)
-    show_real = st.checkbox("Show real (inflation-adj.) values", value=True)
+    inflation_pct = st.number_input("Inflation %", 0.5, 6.0, 2.0, step=0.1, help="Used to deflate nominal projections into today's purchasing power. Eurozone long-run target is ~2%.")
+    show_real = st.checkbox("Show real (inflation-adj.) values", value=True, help="When on, all euro values shown in today's purchasing power. Strongly recommended for long horizons.")
 
 scenario = st.radio(
     "Return scenario",
     list(ASSUMPTIONS["return_scenarios"].keys()),
     index=1,
     horizontal=True,
-    help="Scales all asset return assumptions. Conservative = ×0.8, Optimistic = ×1.2."
+    help="Shifts the wealth projection only — portfolio weights are always optimised on base returns. Conservative (×0.8): markets underperform history. Optimistic (×1.2): markets beat history. Use Base for central planning."
 )
 
 target   = target_pct / 100
@@ -453,8 +458,11 @@ if st.button("🏗️  Build Plan", type="primary") and selected_assets:
                  "Try lowering target, switching to Optimistic scenario, or enabling more assets.")
     else:
         with st.spinner("Running Monte Carlo (2 000 paths × 2 regimes)..."):
-            paths_base   = simulate_paths(port_r, port_v, years, initial, monthly, growth, crisis=False)
-            paths_crisis = simulate_paths(port_r, port_v, years, initial, monthly, growth, crisis=True)
+            # Apply scenario scaling to mu only (weights unchanged across scenarios)
+            scenario_scale = ASSUMPTIONS["return_scenarios"][scenario]
+            sim_mu = port_r * scenario_scale
+            paths_base   = simulate_paths(sim_mu, port_v, years, initial, monthly, growth, crisis=False)
+            paths_crisis = simulate_paths(sim_mu, port_v, years, initial, monthly, growth, crisis=True)
 
         # Sensitivity analysis (±1% on returns)
         sens = sensitivity_analysis(selected_assets, target, scenario, years, initial, monthly, growth)
@@ -552,7 +560,7 @@ if "results" in st.session_state:
         with col_b:
             metrics = [
                 (f"€{med_final:,.0f}", f"Median wealth{label_sfx}", ""),
-                (f"{port_r*100:.2f}%", "Portfolio return (post-shrinkage)", ""),
+                (f"{port_r*100:.2f}%", "Portfolio return — base (post-shrinkage)", ""),
                 (f"{port_v*100:.1f}%", "Portfolio volatility", ""),
                 (f"{sharpe:.2f}", "Sharpe ratio (rf=2%)", ""),
                 (f"€{monthly_income:,.0f}/mo", f"Safe withdrawal income ({int(swr*100)}% SWR)", ""),
