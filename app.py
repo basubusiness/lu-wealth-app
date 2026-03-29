@@ -247,7 +247,19 @@ ASSETS = {
     },
     "Broad Commodities":     {
         "return": 0.040, "vol": 0.20, "cat": "Real",
-        "note": "Energy, metals, agri basket. Inflation hedge.",
+        "note": "Energy, metals, agri basket (e.g. GSCI, Bloomberg Commodity). ~40% energy.",
+        "overlap": [],
+        "regions": {"Global": 1.00},
+    },
+    "Precious Metals":       {
+        "return": 0.045, "vol": 0.18, "cat": "Real",
+        "note": "Silver, platinum, palladium. Higher industrial demand sensitivity than gold. Lower correlation to equities.",
+        "overlap": [],
+        "regions": {"Global": 1.00},
+    },
+    "Energy":                {
+        "return": 0.050, "vol": 0.28, "cat": "Real",
+        "note": "Oil, gas, energy producers. Strong inflation hedge but high vol and policy risk.",
         "overlap": [],
         "regions": {"Global": 1.00},
     },
@@ -1991,6 +2003,19 @@ from its target weight. This is a rules-based trigger — not a market call.
                         "LU1834983477": ("Amundi MSCI Semiconductors ESG Screened UCITS ETF", 0.35, "Semiconductors"),
                         "IE0005E9BX43": ("Global X Uranium UCITS ETF", 0.65, "Uranium / Nuclear"),
                         "IE000CNSFAR2": ("VanEck Uranium and Nuclear Technologies UCITS ETF", 0.55, "Uranium / Nuclear"),
+                        # Precious Metals
+                        "IE00B4NCWG09": ("iShares Physical Silver ETC", 0.20, "Precious Metals"),
+                        "IE00B579F325": ("iShares Physical Platinum ETC", 0.20, "Precious Metals"),
+                        "IE00B4NFYF94": ("iShares Physical Palladium ETC", 0.35, "Precious Metals"),
+                        "DE000A0N62G8": ("Xetra-Gold ETC", 0.36, "Gold"),
+                        "DE000A0S9GB0": ("Xtrackers IE Physical Gold ETC", 0.25, "Gold"),
+                        # Energy
+                        "IE00B6R51Z18": ("iShares Oil & Gas Exploration & Production UCITS ETF", 0.55, "Energy"),
+                        "IE00BYM31M36": ("iShares MSCI World Energy Sector UCITS ETF", 0.25, "Energy"),
+                        "LU1829218749": ("Lyxor MSCI World Energy TR UCITS ETF", 0.30, "Energy"),
+                        # Additional Broad Commodities
+                        "IE00BYXYX521": ("iShares Diversified Commodity Swap UCITS ETF", 0.19, "Broad Commodities"),
+                        "LU1829218582": ("Lyxor Commodities Refinitiv/CoreCommodity CRB UCITS ETF", 0.35, "Broad Commodities"),
                     }
 
                     # Check known ISIN first — most reliable
@@ -2053,7 +2078,9 @@ from its target weight. This is a rules-based trigger — not a market call.
                                 result["asset_class"] = "Global REIT"
                             elif any(x in name_lower for x in ["gold", "precious metal"]):
                                 result["asset_class"] = "Gold"
-                            elif any(x in name_lower for x in ["commodity", "commodities"]):
+                            elif any(x in name_lower for x in ["silver", "platinum", "palladium", "copper", "metal"]):
+                                result["asset_class"] = "Precious Metals"
+                            elif any(x in name_lower for x in ["commodity", "commodities", "energy", "oil", "gas"]):
                                 result["asset_class"] = "Broad Commodities"
                             elif any(x in name_lower for x in ["inflation", "tips", "linker", "inflation-link"]):
                                 result["asset_class"] = "Global Inflation Bonds"
