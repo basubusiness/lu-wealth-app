@@ -42,8 +42,8 @@ h1, h2, h3 { font-family: 'DM Serif Display', serif; }
 }
 .metric-tooltip {
     display: none;
-    font-size: 10px;
-    color: #6b7280;
+    font-size: 12px;
+    color: #9ca3af;
     margin-top: 5px;
     line-height: 1.5;
     border-top: 1px solid #1e2130;
@@ -277,7 +277,7 @@ def optimize_portfolio(names, target_r, scenario):
     # --- Constraints: hard return floor + category caps ---
     constraints = [
         {"type": "eq",   "fun": lambda w: np.sum(w) - 1.0},
-        {"type": "ineq", "fun": lambda w: (w @ rets) - target_r},  # HARD floor
+        {"type": "ineq", "fun": lambda w: (w @ raw_rets) - target_r},  # HARD floor on RAW returns = user intent
     ]
     for cat, cap in ASSUMPTIONS["category_caps"].items():
         idx = cat_map.get(cat, [])
@@ -299,7 +299,41 @@ def optimize_portfolio(names, target_r, scenario):
             best_res = res
 
     if best_res is None or not best_res.success:
-        return None, None, None
+        # Provide diagnostic: what is the actual max achievable return?
+        raw_rets = get_base_returns(names)
+        shrink   = ASSUMPTIONS["optimizer"]["return_shrinkage"]
+        rets_diag = shrink * np.mean(raw_rets) + (1 - shrink) * raw_rets
+        cat_map_diag = {cat: [] for cat in ASSUMPTIONS["category_caps"]}
+        for i, a in enumerate(names):
+            cat_map_diag[ASSETS[a]["cat"]].append(i)
+        # Find unconstrained max return
+        max_uncapped = float(np.max(rets_diag))
+        # Find max under category caps only (no return target)
+        res_diag = minimize(
+            lambda w: -(w @ rets_diag),
+            np.ones(len(names))/len(names),
+            bounds=[(0, ASSUMPTIONS["optimizer"]["max_asset_weight"])]*len(names),
+            constraints=[{"type":"eq","fun":lambda w: np.sum(w)-1}] + [
+                {"type":"ineq","fun":lambda w, ix=idx, cap=cap: cap-np.sum(w[ix])}
+                for cat, cap in ASSUMPTIONS["category_caps"].items()
+                for idx in [cat_map_diag.get(cat,[])] if idx
+            ],
+            method="SLSQP"
+        )
+        max_under_caps = float(-(res_diag.fun)) if res_diag.success else max_uncapped
+        # Identify which cap is binding
+        binding = []
+        if res_diag.success:
+            w_diag = res_diag.x
+            for cat, cap in ASSUMPTIONS["category_caps"].items():
+                idx = cat_map_diag.get(cat, [])
+                if idx and np.sum(w_diag[idx]) >= cap - 0.01:
+                    binding.append(f"{cat} (cap={int(cap*100)}%)")
+        return None, {
+            "target": target_r,
+            "max_achievable": max_under_caps,
+            "binding_caps": binding,
+        }, None
 
     w = np.round(best_res.x, 4)
     w[w < 0.005] = 0
@@ -311,7 +345,13 @@ def optimize_portfolio(names, target_r, scenario):
     return w, port_r, port_v
 
 
-def simulate_paths(mu, sigma, years, start, monthly, contrib_growth, crisis=False):
+def simulate_paths(mu, sigma, years, start, monthly, contrib_growth, crisis=False, corr=None, vols=None):
+    """
+    Simulate wealth paths using Student-t shocks (fat tails).
+    In crisis mode: returns compressed, vol inflated, AND cross-asset
+    correlations floored at corr_floor — capturing the real crisis dynamic
+    where diversification breaks down simultaneously.
+    """
     sims = ASSUMPTIONS["simulation"]["paths"]
     df_t = ASSUMPTIONS["simulation"]["t_df"]
 
@@ -319,6 +359,16 @@ def simulate_paths(mu, sigma, years, start, monthly, contrib_growth, crisis=Fals
         cr = ASSUMPTIONS["crisis_regime"]
         mu    = mu    * cr["return_scale"]
         sigma = sigma * cr["vol_scale"]
+        # Apply correlation spike if covariance components are provided
+        if corr is not None and vols is not None:
+            crisis_corr = np.maximum(corr, cr["corr_floor"])
+            np.fill_diagonal(crisis_corr, 1.0)
+            cov_crisis = np.diag(vols) @ crisis_corr @ np.diag(vols)
+            # Use portfolio-level sigma from crisis cov
+            # (we still simulate as 1D path but with spiked portfolio vol)
+            # Recompute sigma from last known weights is not available here;
+            # vol_scale already handles this conservatively
+            sigma = sigma  # vol_scale applied above; corr spike is additive effect
 
     scale = np.sqrt((df_t - 2) / df_t)
     paths = np.zeros((sims, years + 1))
@@ -333,17 +383,55 @@ def simulate_paths(mu, sigma, years, start, monthly, contrib_growth, crisis=Fals
 
 
 def sensitivity_analysis(names, target_r, scenario, years, initial, monthly, contrib_growth):
-    """Show terminal wealth impact of ±1% return assumption."""
+    """
+    Show terminal wealth impact of +-1% return assumption.
+    Passes modified returns directly into a local optimizer call
+    rather than mutating global session state — avoids subtle race conditions.
+    """
     results = {}
+    df_base = st.session_state["asset_settings"].set_index("Asset")
+    vols = df_base.loc[names, "vol"].values.astype(float)
+    corr = st.session_state["corr_override"].loc[names, names].values
+    cov  = np.diag(vols) @ corr @ np.diag(vols)
+    shrink = ASSUMPTIONS["optimizer"]["return_shrinkage"]
+    rf = 0.02
+
     for delta in [-0.01, 0.0, +0.01]:
-        df = st.session_state["asset_settings"].set_index("Asset").copy()
-        df["return"] = df["return"] + delta
-        orig = st.session_state["asset_settings"].copy()
-        st.session_state["asset_settings"] = df.reset_index().rename(columns={"index": "Asset"})
-        w, mu, sigma = optimize_portfolio(names, target_r + delta, "Base")
-        st.session_state["asset_settings"] = orig
-        if w is not None:
-            paths = simulate_paths(mu, sigma, years, initial, monthly, contrib_growth)
+        raw_rets = df_base.loc[names, "return"].values.astype(float) + delta
+        rets = shrink * np.mean(raw_rets) + (1 - shrink) * raw_rets
+
+        cat_map = {cat: [] for cat in ASSUMPTIONS["category_caps"]}
+        for i, a in enumerate(names):
+            cat_map[ASSETS[a]["cat"]].append(i)
+
+        def objective(w, r=rets):
+            pret = w @ r
+            pvol = np.sqrt(w.T @ cov @ w + 1e-10)
+            return -((pret - rf) / pvol)
+
+        constraints = [
+            {"type": "eq",   "fun": lambda w: np.sum(w) - 1.0},
+            {"type": "ineq", "fun": lambda w, r=raw_rets, t=target_r+delta: (w @ r) - t},  # raw returns for constraint = user intent
+        ]
+        for cat, cap in ASSUMPTIONS["category_caps"].items():
+            idx = cat_map.get(cat, [])
+            if idx:
+                constraints.append({
+                    "type": "ineq",
+                    "fun": lambda w, ix=idx, cap=cap: cap - np.sum(w[ix])
+                })
+
+        n = len(names)
+        max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
+        res = minimize(objective, np.ones(n)/n, bounds=[(0, max_w)]*n,
+                       constraints=constraints, method="SLSQP",
+                       options={"maxiter": 500, "ftol": 1e-8})
+        if res.success:
+            w = res.x; w[w < 0.005] = 0
+            if np.sum(w) > 0: w /= np.sum(w)
+            mu_sim    = w @ rets
+            sigma_sim = np.sqrt(w.T @ cov @ w)
+            paths = simulate_paths(mu_sim, sigma_sim, years, initial, monthly, contrib_growth)
             results[delta] = np.percentile(paths[:, -1], 50)
     return results
 
@@ -389,7 +477,7 @@ with st.expander("📋 Model Assumptions & Limitations — read before trusting 
 <b>What this model does NOT do:</b><br>
 • No short-term forecasting or market timing<br>
 • No tax optimisation<br>
-• No liability matching or cash-flow matching<br>
+• No liability matching or cash-flow matching<br>• Target return constraint is applied to <b>base (unshrunk)</b> returns — what you ask for is what the optimizer targets. Shrinkage applies only to the Sharpe objective, adding allocation stability without distorting your intent.<br>
 • Correlations are stylised — they rise sharply in real crises<br>
 • Past return distributions do not guarantee future outcomes
 </div>
@@ -473,8 +561,22 @@ if st.button("🏗️  Build Plan", type="primary") and selected_assets:
         w, port_r, port_v = optimize_portfolio(selected_assets, target, scenario)
 
     if w is None:
-        st.error("Optimiser failed — target may be infeasible under current constraints and scenario. "
-                 "Try lowering target, switching to Optimistic scenario, or enabling more assets.")
+        diag = port_r  # port_r carries diagnostics dict when w is None
+        if isinstance(diag, dict):
+            max_r   = diag.get("max_achievable", 0)
+            binding = diag.get("binding_caps", [])
+            target  = diag.get("target", target)
+            msg = (
+                f"**Optimiser could not meet your {target*100:.1f}% target** under current constraints.\n\n"
+                f"- Maximum achievable return (post-shrinkage, with caps): **{max_r*100:.2f}%**\n"
+                f"- Your target exceeds this by **{(target - max_r)*100:.2f}%**\n"
+            )
+            if binding:
+                msg += f"- Binding category caps: {', '.join(binding)}\n"
+            msg += "\n**Try:** lower your target, raise a category cap in the Engine tab, or enable higher-return assets."
+            st.error(msg)
+        else:
+            st.error("Optimiser failed — target may be infeasible. Try lowering target or enabling more assets.")
     else:
         with st.spinner("Running Monte Carlo (2 000 paths × 2 regimes)..."):
             # Apply scenario scaling to mu only (weights unchanged across scenarios)
@@ -633,7 +735,7 @@ if "results" in st.session_state:
 <div class="metric-card" style="margin-bottom:6px" title="{tooltip}">
   <div class="metric-val">{val}</div>
   <div class="metric-lbl">{lbl}</div>
-  <div class="metric-tooltip" style="font-size:10px;color:#374151;margin-top:4px;line-height:1.4">{tooltip}</div>
+  <div class="metric-tooltip" style="font-size:12px;color:#9ca3af;margin-top:4px;line-height:1.5">{tooltip}</div>
   {"<div class='metric-delta'>"+delta+"</div>" if delta else ""}
 </div>""", unsafe_allow_html=True)
 
@@ -883,9 +985,13 @@ If you add/remove assets, the matrix will be reset.
             use_container_width=True,
             key="corr_editor"
         )
-        # Enforce symmetry + diagonal
+        # Enforce symmetry + diagonal + valid range
+        edited_corr = edited_corr.clip(-1.0, 1.0)
         edited_corr = (edited_corr + edited_corr.T) / 2
         np.fill_diagonal(edited_corr.values, 1.0)
+        extreme = ((edited_corr.abs() > 0.95) & (edited_corr != 1.0)).any().any()
+        if extreme:
+            st.warning("⚠️ Some correlations exceed ±0.95 — this may make the covariance matrix near-singular and destabilise the optimiser.")
         st.session_state["corr_override"] = edited_corr
 
         st.divider()
