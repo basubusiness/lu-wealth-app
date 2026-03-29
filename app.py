@@ -40,6 +40,25 @@ h1, h2, h3 { font-family: 'DM Serif Display', serif; }
     letter-spacing: 1px;
     margin-top: 4px;
 }
+.metric-tooltip {
+    display: none;
+    font-size: 10px;
+    color: #6b7280;
+    margin-top: 5px;
+    line-height: 1.5;
+    border-top: 1px solid #1e2130;
+    padding-top: 5px;
+}
+.metric-card:hover .metric-tooltip {
+    display: block;
+}
+.metric-card {
+    cursor: default;
+    transition: border-color 0.15s;
+}
+.metric-card:hover {
+    border-color: #3b82f6 !important;
+}
 .metric-delta {
     font-size: 11px;
     color: #4ade80;
@@ -516,6 +535,19 @@ if "results" in st.session_state:
     sharpe         = (port_r - 0.02) / port_v if port_v > 0 else 0
 
     # --- Tabs ---
+    with st.expander("📖 Glossary — key terms used in this tool", expanded=False):
+        st.markdown("""
+| Term | Meaning |
+|------|---------|
+| **SWR (Safe Withdrawal Rate)** | The % of your portfolio you can spend each year in retirement without running out. The classic figure is 4% (Bengen 1994). You keep the rest invested. |
+| **Sharpe Ratio** | Return earned per unit of risk taken. (Portfolio return − risk-free rate) ÷ volatility. Higher = more efficient. >0.5 is good, >1.0 is excellent. |
+| **Shrinkage** | A statistical technique that pulls return estimates toward the average, reducing overconfidence in any single asset's forecast. |
+| **Volatility** | Annualised standard deviation of returns — a measure of how much the portfolio value swings year to year. |
+| **VaR (Value at Risk)** | The worst expected loss at a given confidence level. VaR 95% = you would expect to do better than this in 19 out of 20 years. |
+| **Monte Carlo** | Running thousands of random simulations of possible future market paths to build a probability distribution of outcomes. |
+| **Compounding tipping point** | The year when your portfolio's investment return (at SWR) first exceeds your monthly savings contribution. |
+| **Nominal vs Real** | Nominal = future euros as a number. Real = adjusted for inflation, showing today's purchasing power equivalent. |
+""")
     tab_plan, tab_proj, tab_risk, tab_reb, tab_engine = st.tabs([
         "📐 Plan", "📈 Projection", "🛡️ Risk", "⚖️ Rebalance", "⚙️ Engine"
     ])
@@ -559,18 +591,49 @@ if "results" in st.session_state:
 
         with col_b:
             metrics = [
-                (f"€{med_final:,.0f}", f"Median wealth{label_sfx}", ""),
-                (f"{port_r*100:.2f}%", "Portfolio return — base (post-shrinkage)", ""),
-                (f"{port_v*100:.1f}%", "Portfolio volatility", ""),
-                (f"{sharpe:.2f}", "Sharpe ratio (rf=2%)", ""),
-                (f"€{monthly_income:,.0f}/mo", f"Safe withdrawal income ({int(swr*100)}% SWR)", ""),
-                (f"Year {tipping}" if tipping else ">horizon", "Compounding tipping point", ""),
+                (
+                    f"€{med_final:,.0f}",
+                    f"Median wealth{label_sfx}",
+                    "",
+                    "The 50th percentile outcome across 2,000 Monte Carlo simulations. Half of simulated paths end above this, half below. Not a guarantee — treat as central estimate."
+                ),
+                (
+                    f"{port_r*100:.2f}%",
+                    "Portfolio return — base (post-shrinkage)",
+                    "",
+                    f"Weighted average of base asset returns after {int(ASSUMPTIONS['optimizer']['return_shrinkage']*100)}% shrinkage toward the grand mean. Shrinkage reduces overconfidence in return estimates. This is used for optimisation; your selected scenario scales the simulation mu."
+                ),
+                (
+                    f"{port_v*100:.1f}%",
+                    "Portfolio volatility",
+                    "",
+                    "Annualised standard deviation of portfolio returns, accounting for cross-asset correlations. A 15% vol means roughly a 15% swing (up or down) in a typical year."
+                ),
+                (
+                    f"{sharpe:.2f}",
+                    "Sharpe ratio (rf=2%)",
+                    "",
+                    "Excess return per unit of risk: (portfolio return − 2% risk-free rate) / volatility. Above 0.5 is considered good; above 1.0 is excellent. The optimiser maximises this."
+                ),
+                (
+                    f"€{monthly_income:,.0f}/mo",
+                    f"Safe withdrawal income ({int(swr*100)}% SWR)",
+                    "",
+                    f"SWR = Safe Withdrawal Rate. If your portfolio is worth X at retirement, you can withdraw {int(swr*100)}% per year (X × 0.04 ÷ 12 monthly) without depleting it over a 30-year horizon — based on Bengen (1994). You keep the rest invested so it keeps growing. Does NOT include taxes or withdrawal-phase sequence risk. Many planners use 3–3.5% for extra safety."
+                ),
+                (
+                    f"Year {tipping}" if tipping else ">horizon",
+                    "Compounding tipping point",
+                    "",
+                    "Compounding tipping point: the year when your portfolio's projected annual income (at 4% SWR) first exceeds your monthly savings. After this, the market contributes more to your wealth than your salary does."
+                ),
             ]
-            for val, lbl, delta in metrics:
+            for val, lbl, delta, tooltip in metrics:
                 st.markdown(f"""
-<div class="metric-card" style="margin-bottom:6px">
+<div class="metric-card" style="margin-bottom:6px" title="{tooltip}">
   <div class="metric-val">{val}</div>
   <div class="metric-lbl">{lbl}</div>
+  <div class="metric-tooltip" style="font-size:10px;color:#374151;margin-top:4px;line-height:1.4">{tooltip}</div>
   {"<div class='metric-delta'>"+delta+"</div>" if delta else ""}
 </div>""", unsafe_allow_html=True)
 
