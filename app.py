@@ -1150,12 +1150,23 @@ if selected_assets:
                 f"This is fine if intentional — just be aware."
             )
 
-# Rebuild correlation matrix only when selection changes
+# Re-derive selected_assets after equity mode toggle may have changed checkboxes
+# This ensures the list reflects the locked/forced state set by the mode
+selected_assets = [a for a in ASSETS if st.session_state.get(f"asset_{a}", False)]
+
+# Rebuild correlation matrix when selection changes OR when matrix is stale
+# (stale = contains assets not in selected_assets, or missing assets that are selected)
 sel_key = tuple(sorted(selected_assets))
-if "corr_override" not in st.session_state or st.session_state.get("_last_sel") != sel_key:
-    if selected_assets:
-        st.session_state["corr_override"] = build_corr(selected_assets)
-        st.session_state["_last_sel"] = sel_key
+corr_stale = (
+    "corr_override" not in st.session_state
+    or st.session_state.get("_last_sel") != sel_key
+    or (selected_assets and not all(
+        a in st.session_state["corr_override"].index for a in selected_assets
+    ))
+)
+if corr_stale and selected_assets:
+    st.session_state["corr_override"] = build_corr(selected_assets)
+    st.session_state["_last_sel"] = sel_key
 
 # ============================================================
 # BUILD BUTTON
@@ -1399,6 +1410,10 @@ if "results" in st.session_state:
         # Compute risk contribution for active portfolio
         _df_lu  = st.session_state["asset_settings"].set_index("Asset")
         _vols_a = np.array([_df_lu.loc[a, "vol"] for a in assets])
+        # Guard: rebuild corr if active portfolio assets not all present
+        _corr_idx = st.session_state["corr_override"].index.tolist()
+        if not all(a in _corr_idx for a in assets):
+            st.session_state["corr_override"] = build_corr(assets)
         _corr_a = st.session_state["corr_override"].loc[assets, assets].values
         _cov_a  = np.diag(_vols_a) @ _corr_a @ np.diag(_vols_a)
         _rc     = (w * (_cov_a @ w)) / (port_v ** 2 + 1e-10)
