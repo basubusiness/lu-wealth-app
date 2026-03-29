@@ -552,6 +552,127 @@ def rebalance_triggers(weights, names, current_vals):
     return pd.DataFrame(rows)
 
 
+def find_alternative_portfolios(names, target_r, n_alternatives=3, sharpe_tol=0.08):
+    """
+    Generate structurally distinct portfolios with similar risk/return profile.
+
+    Strategy: run optimizer repeatedly with different diversity penalties that
+    push it toward different corners of the feasible set. Filter solutions
+    within `sharpe_tol` Sharpe of the best, deduplicate by allocation distance.
+
+    Returns list of dicts: [{weights, port_r, port_v, sharpe, label}, ...]
+    """
+    df      = st.session_state["asset_settings"].set_index("Asset")
+    vols    = df.loc[names, "vol"].values.astype(float)
+    raw_rets = get_base_returns(names)
+    shrink  = ASSUMPTIONS["optimizer"]["return_shrinkage"]
+    rets    = shrink * np.mean(raw_rets) + (1 - shrink) * raw_rets
+    corr    = st.session_state["corr_override"].loc[names, names].values
+    cov     = np.diag(vols) @ corr @ np.diag(vols)
+    rf      = 0.02
+    n       = len(names)
+
+    cat_map = {cat: [] for cat in ASSUMPTIONS["category_caps"]}
+    for i, a in enumerate(names):
+        cat_map[ASSETS[a]["cat"]].append(i)
+
+    base_constraints = [
+        {"type": "eq",   "fun": lambda w: np.sum(w) - 1.0},
+        {"type": "ineq", "fun": lambda w: (w @ raw_rets) - target_r},
+    ]
+    for cat, cap in ASSUMPTIONS["category_caps"].items():
+        idx = cat_map.get(cat, [])
+        if idx:
+            base_constraints.append({
+                "type": "ineq",
+                "fun": lambda w, ix=idx, cap=cap: cap - np.sum(w[ix])
+            })
+
+    global_max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
+    bounds = [(0.0, ASSETS[a].get("max_w", global_max_w)) for a in names]
+
+    candidates = []
+
+    # Diversity modes: vary the penalty structure to push toward different solutions
+    # Each mode biases the optimizer toward a different structural outcome
+    diversity_modes = [
+        # (label, hhi_penalty, entropy_bonus, concentration_cap)
+        ("Concentrated",   0.00, 0.00, None),   # pure Sharpe — finds sharpest solution
+        ("Diversified",    0.30, 0.00, None),    # penalise concentration strongly
+        ("Max Spread",     0.00, 0.40, None),    # entropy bonus — spreads weights evenly
+        ("Bond Tilted",    0.15, 0.00, "Bond"),  # bias toward bond-heavy solution
+        ("Real Assets",    0.15, 0.00, "Real"),  # bias toward real asset solution
+        ("Equity Focused", 0.05, 0.00, "Equity"),# bias toward equity-heavy
+        ("Alt Satellite",  0.20, 0.00, "Alt"),   # allow alts to feature more
+    ]
+
+    np.random.seed(42)
+    for label, hhi_pen, entropy_bon, bias_cat in diversity_modes:
+        # Build biased starting seed
+        if bias_cat and cat_map.get(bias_cat):
+            seed = np.ones(n) * 0.02
+            for idx in cat_map[bias_cat]:
+                seed[idx] = 0.15
+            seed /= seed.sum()
+        else:
+            seed = np.ones(n) / n
+
+        def objective(w, h=hhi_pen, e=entropy_bon):
+            port_ret = w @ rets
+            port_vol = np.sqrt(w.T @ cov @ w + 1e-10)
+            sharpe   = (port_ret - rf) / port_vol
+            hhi      = np.sum(w ** 2)           # Herfindahl — penalise concentration
+            entropy  = -np.sum(w * np.log(w + 1e-10))  # entropy bonus
+            return -sharpe + h * hhi - e * entropy
+
+        # Try multiple seeds for robustness
+        best = None
+        for s in [seed, np.random.dirichlet(np.ones(n)), np.ones(n)/n]:
+            res = minimize(objective, s, bounds=bounds, constraints=base_constraints,
+                           method="SLSQP", options={"maxiter": 800, "ftol": 1e-8})
+            if res.success and (best is None or res.fun < best.fun):
+                best = res
+
+        if best is None or not best.success:
+            continue
+
+        w_c = np.round(best.x, 4)
+        w_c[w_c < 0.005] = 0
+        if np.sum(w_c) < 0.01:
+            continue
+        w_c /= np.sum(w_c)
+
+        pr = w_c @ rets
+        pv = np.sqrt(w_c.T @ cov @ w_c)
+        sh = (pr - rf) / pv if pv > 0 else 0
+
+        candidates.append({
+            "weights": w_c, "port_r": pr, "port_v": pv,
+            "sharpe": sh, "label": label,
+        })
+
+    if not candidates:
+        return []
+
+    # Find best Sharpe and filter within tolerance
+    best_sharpe = max(c["sharpe"] for c in candidates)
+    filtered    = [c for c in candidates if c["sharpe"] >= best_sharpe - sharpe_tol]
+
+    # Deduplicate: keep solutions that differ by >15% L1 distance from already-kept ones
+    kept = []
+    for c in sorted(filtered, key=lambda x: -x["sharpe"]):
+        if not kept:
+            kept.append(c)
+            continue
+        min_dist = min(np.sum(np.abs(c["weights"] - k["weights"])) for k in kept)
+        if min_dist > 0.15:
+            kept.append(c)
+        if len(kept) >= n_alternatives:
+            break
+
+    return kept
+
+
 # ============================================================
 # HEADER
 # ============================================================
@@ -702,10 +823,15 @@ if st.button("🏗️  Build Plan", type="primary") and selected_assets:
         # Sensitivity analysis (±1% on returns)
         sens = sensitivity_analysis(selected_assets, target, scenario, years, initial, monthly, growth)
 
+        # Alternative portfolios with similar risk/return
+        with st.spinner("Finding alternative portfolio structures..."):
+            alternatives = find_alternative_portfolios(selected_assets, target)
+
         st.session_state["results"] = {
             "w": w, "port_r": port_r, "port_v": port_v,
             "paths_base": paths_base, "paths_crisis": paths_crisis,
             "assets": selected_assets, "sens": sens,
+            "alternatives": alternatives,
         }
 
 # ============================================================
@@ -851,6 +977,77 @@ if "results" in st.session_state:
   <div class="metric-lbl">{lbl}</div>
   <div class="metric-tooltip" style="font-size:12px;color:#9ca3af;margin-top:4px;line-height:1.5">{tooltip}</div>
   {"<div class='metric-delta'>"+delta+"</div>" if delta else ""}
+</div>""", unsafe_allow_html=True)
+
+        # ── Alternative Portfolio Comparison ──────────────────
+        alts = R.get("alternatives", [])
+        if alts:
+            st.divider()
+            st.subheader("Alternative Portfolio Structures")
+            st.caption(
+                "Same target return, similar Sharpe — but structurally different. "
+                "Each reflects a different philosophy. Pick the one that matches your conviction."
+            )
+
+            # Build comparison table
+            all_opts = [{"label": "★ Optimal (selected)", "weights": w,
+                          "port_r": port_r, "port_v": port_v,
+                          "sharpe": (port_r - 0.02) / port_v}] + alts
+
+            # Radio selector
+            alt_labels = [o["label"] for o in all_opts]
+            chosen_label = st.radio("View allocation:", alt_labels, horizontal=True,
+                                     key="alt_selector")
+            chosen = next(o for o in all_opts if o["label"] == chosen_label)
+
+            col_cmp1, col_cmp2 = st.columns([3, 2])
+            with col_cmp1:
+                cmp_df = pd.DataFrame({
+                    "Asset":    assets,
+                    "Category": [ASSETS[a]["cat"] for a in assets],
+                })
+                for o in all_opts:
+                    cmp_df[o["label"]] = [f"{v*100:.1f}%" if v > 0.005 else "—"
+                                           for v in o["weights"]]
+                st.dataframe(cmp_df.set_index("Asset"), use_container_width=True)
+
+            with col_cmp2:
+                # Radar / bar comparison of key stats
+                fig_cmp = go.Figure()
+                colors_cmp = ["#60a5fa","#4ade80","#f59e0b","#f87171","#a78bfa","#34d399","#fb923c"]
+                for ci, o in enumerate(all_opts):
+                    fig_cmp.add_trace(go.Bar(
+                        name=o["label"],
+                        x=["Return", "Volatility", "Sharpe×10"],
+                        y=[o["port_r"]*100, o["port_v"]*100, o["sharpe"]*10],
+                        marker_color=colors_cmp[ci % len(colors_cmp)],
+                        opacity=0.85,
+                    ))
+                fig_cmp.update_layout(
+                    barmode="group",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#94a3b8", size=11),
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=9)),
+                    height=260,
+                    margin=dict(t=10, b=10, l=10, r=10),
+                    yaxis=dict(gridcolor="#1e2130"),
+                )
+                st.plotly_chart(fig_cmp, use_container_width=True)
+
+                # Key stats for chosen
+                st.markdown(f"""
+<div class="metric-card" style="margin-top:8px">
+  <div class="metric-val" style="font-size:16px">{chosen["label"]}</div>
+  <div class="metric-lbl" style="margin-top:6px">
+    Return: {chosen["port_r"]*100:.2f}% &nbsp;|&nbsp;
+    Vol: {chosen["port_v"]*100:.1f}% &nbsp;|&nbsp;
+    Sharpe: {chosen["sharpe"]:.2f}
+  </div>
+  <div class="metric-tooltip" style="display:block;font-size:11px;margin-top:6px">
+    To use this allocation instead of the optimal, copy the weights above.
+    ETF mapping will be added in a future version.
+  </div>
 </div>""", unsafe_allow_html=True)
 
         # Sensitivity callout
@@ -1107,6 +1304,34 @@ If you add/remove assets, the matrix will be reset.
         if extreme:
             st.warning("⚠️ Some correlations exceed ±0.95 — this may make the covariance matrix near-singular and destabilise the optimiser.")
         st.session_state["corr_override"] = edited_corr
+
+        st.divider()
+        st.subheader("Asset Utility Analysis")
+        st.caption("Assets the optimizer never selects at your current target — consider removing or adjusting their return assumptions.")
+        if "results" in st.session_state:
+            res_w  = st.session_state["results"]["w"]
+            res_as = st.session_state["results"]["assets"]
+            dead   = [(a, w_i) for a, w_i in zip(res_as, res_w) if w_i < 0.005]
+            active = [(a, w_i) for a, w_i in zip(res_as, res_w) if w_i >= 0.005]
+            if dead:
+                dead_df = pd.DataFrame([{
+                    "Asset": a,
+                    "Category": ASSETS[a]["cat"],
+                    "Base Return": f"{ASSETS[a]['return']*100:.1f}%",
+                    "Volatility": f"{ASSETS[a]['vol']*100:.1f}%",
+                    "Note": ASSETS[a].get("note",""),
+                    "Status": "❌ Not selected by optimizer"
+                } for a, _ in dead])
+                st.dataframe(dead_df, use_container_width=True, hide_index=True)
+                st.caption(
+                    "These assets were available but not chosen. Either their risk-adjusted return "
+                    "is dominated by other assets at this target, or the category cap is already full. "
+                    "Try: raising their return assumption in the table above, or excluding competing assets."
+                )
+            else:
+                st.success("All selected assets appear in the optimal portfolio.")
+        else:
+            st.info("Run Build Plan first to see asset utility analysis.")
 
         st.divider()
         st.subheader("Optimizer & Simulation Config")
