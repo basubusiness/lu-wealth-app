@@ -188,12 +188,14 @@ ASSETS = {
         "return": 0.075, "vol": 0.16, "cat": "Equity",
         "note": "All-world market cap (MSCI World / FTSE All-World). ~65% US.",
         "overlap": ["US Equity"],
+        "regions": {"US": 0.65, "Europe": 0.15, "Japan/Pacific": 0.10, "Other DM": 0.10},
     },
     # ── US ────────────────────────────────────────────────────────────────
     "US Equity":             {
         "return": 0.078, "vol": 0.17, "cat": "Equity",
         "note": "S&P 500 or total US market. Overlaps with World Equity.",
         "overlap": ["World Equity"],
+        "regions": {"US": 1.00},
     },
     # ── Non-US Developed ──────────────────────────────────────────────────
     # Clean complement to US Equity — no overlap with World Equity if used
@@ -202,84 +204,99 @@ ASSETS = {
         "return": 0.070, "vol": 0.16, "cat": "Equity",
         "note": "Developed Europe (STOXX 600 / MSCI Europe). No US overlap.",
         "overlap": [],
+        "regions": {"Europe": 1.00},
     },
     "Japan / Pacific":       {
         "return": 0.065, "vol": 0.17, "cat": "Equity",
         "note": "Japan, Australia, Singapore. Low US correlation.",
         "overlap": [],
+        "regions": {"Japan/Pacific": 1.00},
     },
     # ── Emerging & Frontier ───────────────────────────────────────────────
     "Emerging Markets":      {
         "return": 0.080, "vol": 0.22, "cat": "Equity",
         "note": "MSCI EM — China, India, Brazil, Taiwan, Korea, etc.",
         "overlap": [],
+        "regions": {"China": 0.30, "India": 0.18, "Other EM": 0.52},
     },
     "Frontier Markets":      {
         "return": 0.085, "vol": 0.28, "cat": "Alt",
         "note": "Pre-EM countries. Higher growth potential, lower liquidity.",
         "overlap": [],
+        "regions": {"Frontier": 1.00},
     },
     # ── Size factor ───────────────────────────────────────────────────────
     "Global Small Cap":      {
         "return": 0.082, "vol": 0.19, "cat": "Equity",
         "note": "Size premium tilt. Overlaps with World/US if both held.",
         "overlap": ["World Equity", "US Equity"],
+        "regions": {"US": 0.55, "Europe": 0.20, "Japan/Pacific": 0.10, "Other DM": 0.15},
     },
     # ── Real Assets ───────────────────────────────────────────────────────
     "Global REIT":           {
         "return": 0.060, "vol": 0.19, "cat": "Real",
         "note": "Listed real estate. Rate-sensitive; correlates with equity in stress.",
         "overlap": [],
+        "regions": {"US": 0.55, "Europe": 0.20, "Asia": 0.25},
     },
     "Gold":                  {
         "return": 0.050, "vol": 0.17, "cat": "Real",
         "note": "Crisis hedge, low long-run real return. Useful as ballast.",
         "overlap": [],
+        "regions": {"Global": 1.00},
     },
     "Broad Commodities":     {
         "return": 0.040, "vol": 0.20, "cat": "Real",
         "note": "Energy, metals, agri basket. Inflation hedge.",
         "overlap": [],
+        "regions": {"Global": 1.00},
     },
     # ── Bonds ─────────────────────────────────────────────────────────────
     "Euro Gov Bonds":        {
         "return": 0.030, "vol": 0.06, "cat": "Bond",
         "note": "EUR sovereign debt. Capital preservation, low return.",
         "overlap": [],
+        "regions": {"Europe": 1.00},
     },
     "Corp Bonds":            {
         "return": 0.035, "vol": 0.07, "cat": "Bond",
         "note": "Investment-grade corporate bonds. Slight credit premium.",
         "overlap": [],
+        "regions": {"US": 0.55, "Europe": 0.35, "Other": 0.10},
     },
     "Global Inflation Bonds":{
         "return": 0.032, "vol": 0.05, "cat": "Bond",
         "note": "TIPS / linkers. Real return protection.",
         "overlap": [],
+        "regions": {"US": 0.50, "Europe": 0.30, "Other": 0.20},
     },
     # ── Cash ──────────────────────────────────────────────────────────────
     "Cash":                  {
         "return": 0.025, "vol": 0.01, "cat": "Cash",
         "note": "Money market / short-term deposits. Liquidity buffer.",
         "overlap": [],
+        "regions": {"EUR": 1.00},
     },
     # ── Satellite / Speculative ───────────────────────────────────────────
     "Semiconductors":        {
         "return": 0.090, "vol": 0.30, "cat": "Alt",
         "note": "AI & chip supply chain thematic. High vol, high US concentration.",
         "overlap": ["World Equity", "US Equity"],
+        "regions": {"US": 0.65, "Taiwan": 0.15, "South Korea": 0.10, "Other": 0.10},
     },
     "Uranium / Nuclear":     {
         "return": 0.090, "vol": 0.38, "cat": "Alt",
         "note": "Nuclear energy renaissance theme. Illiquid, policy-sensitive. Hard-capped at 5%.",
         "overlap": [],
-        "max_w": 0.05,   # per-asset hard cap — overrides global max
+        "regions": {"Canada": 0.35, "US": 0.25, "Australia": 0.20, "Other": 0.20},
+        "max_w": 0.05,
     },
     "Crypto":                {
         "return": 0.100, "vol": 0.75, "cat": "Alt",
         "note": "Bitcoin / broad crypto. Extreme vol. Treat as speculative satellite only.",
         "overlap": [],
-        "max_w": 0.05,   # hard cap
+        "regions": {"Global": 1.00},
+        "max_w": 0.05,
     },
 }
 
@@ -574,6 +591,21 @@ def check_drawdown_guardrail(port_v, port_r, shared_shocks, years, initial, mont
         return True, wy, "warning"
     else:
         return True, wy, "ok"
+
+
+def compute_effective_exposure(weights, names):
+    """
+    Compute effective geographic/regional exposure by multiplying each asset
+    weight by its regional decomposition. Makes World+US overlap visible.
+    """
+    exposure = {}
+    for w_i, name in zip(weights, names):
+        if w_i < 0.005:
+            continue
+        regions = ASSETS[name].get("regions", {"Unclassified": 1.0})
+        for region, fraction in regions.items():
+            exposure[region] = exposure.get(region, 0.0) + w_i * fraction
+    return dict(sorted(exposure.items(), key=lambda x: -x[1]))
 
 
 def rebalance_triggers(weights, names, current_vals):
@@ -988,9 +1020,61 @@ inflation = inflation_pct / 100
 # ASSET SELECTION
 # ============================================================
 with st.expander("🧩 Asset Universe", expanded=False):
+
+    # ── World vs US equity mode ───────────────────────────────────────────
+    st.markdown("**Equity Coverage Mode**")
+    eq_mode = st.radio(
+        "How do you want to cover global equities?",
+        [
+            "🌍 Single all-world ETF (e.g. VWCE) — World Equity only",
+            "🧩 Regional building blocks — US + Europe + Japan/Pacific separately",
+            "🔀 All-world + tilt — World Equity as core, add regions for conviction tilts",
+        ],
+        index=0,
+        key="eq_coverage_mode",
+        help=(
+            "Single all-world: simplest, one ETF covers everything (World Equity ~65% US). "
+            "Regional blocks: you control exact country weights, no overlap. "
+            "All-world + tilt: World as base, add Europe or Japan to overweight them."
+        )
+    )
+
+    # Apply mode: enforce mutual exclusivity between World and US Equity
+    if "🌍 Single all-world" in eq_mode:
+        # Lock: World Equity on, US/Europe/Japan off
+        st.session_state["asset_World Equity"]   = True
+        st.session_state["asset_US Equity"]       = False
+        st.session_state["asset_Europe Equity"]   = False
+        st.session_state["asset_Japan / Pacific"] = False
+        _locked_assets = {"US Equity", "Europe Equity", "Japan / Pacific"}
+        _forced_on     = {"World Equity"}
+
+    elif "🧩 Regional building blocks" in eq_mode:
+        # Lock: US/Europe/Japan on, World off
+        st.session_state["asset_World Equity"]   = False
+        st.session_state["asset_US Equity"]       = True
+        st.session_state["asset_Europe Equity"]   = True
+        st.session_state["asset_Japan / Pacific"] = True
+        _locked_assets = {"World Equity"}
+        _forced_on     = {"US Equity", "Europe Equity", "Japan / Pacific"}
+
+    else:
+        # All-world + tilt: World on, regions available but optional
+        st.session_state["asset_World Equity"] = True
+        st.session_state["asset_US Equity"]    = False  # still exclude pure US to avoid double-count
+        _locked_assets = {"US Equity"}
+        _forced_on     = {"World Equity"}
+
+    st.caption(
+        "ℹ️ World Equity and US Equity are mutually exclusive by default — "
+        "holding both double-counts your US exposure (~65% of World is already US stocks)."
+    )
+    st.divider()
+
     def sync_cat(cat_name, assets_in_cat):
         for a in assets_in_cat:
-            st.session_state[f"asset_{a}"] = st.session_state[f"master_{cat_name}"]
+            if a not in _locked_assets and a not in _forced_on:
+                st.session_state[f"asset_{a}"] = st.session_state[f"master_{cat_name}"]
 
     cats = sorted(set(d["cat"] for d in ASSETS.values()))
     cols = st.columns(len(cats))
@@ -1001,12 +1085,29 @@ with st.expander("🧩 Asset Universe", expanded=False):
             st.checkbox(f"All {cat}", key=f"master_{cat}",
                         on_change=sync_cat, args=(cat, cat_assets))
             for a in cat_assets:
-                overlaps = ASSETS[a].get("overlap", [])
-                active_overlaps = [o for o in overlaps if st.session_state.get(f"asset_{o}", False)]
-                label = a
-                st.checkbox(label, key=f"asset_{a}",
-                            help=ASSETS[a].get("note", "") +
-                            (f" ⚠️ Overlaps with: {', '.join(active_overlaps)}" if active_overlaps else ""))
+                is_locked  = a in _locked_assets
+                is_forced  = a in _forced_on
+                overlaps   = ASSETS[a].get("overlap", [])
+                # Only flag overlaps not already handled by mode
+                active_overlaps = [
+                    o for o in overlaps
+                    if st.session_state.get(f"asset_{o}", False)
+                    and o not in _locked_assets
+                ]
+                note = ASSETS[a].get("note", "")
+                if is_locked:
+                    help_txt = f"🔒 Excluded in '{eq_mode[:20]}...' mode to prevent overlap. Change equity mode above to enable."
+                elif is_forced:
+                    help_txt = f"✅ Active in '{eq_mode[:20]}...' mode. " + note
+                else:
+                    help_txt = note + (f" ⚠️ Overlaps with: {', '.join(active_overlaps)}" if active_overlaps else "")
+
+                st.checkbox(
+                    a,
+                    key=f"asset_{a}",
+                    disabled=is_locked or is_forced,
+                    help=help_txt,
+                )
 
 # Derive selected list AFTER widgets render
 selected_assets = [a for a in ASSETS if st.session_state.get(f"asset_{a}", False)]
@@ -1037,13 +1138,17 @@ if selected_assets:
                 if pair not in overlap_pairs:
                     overlap_pairs.append(pair)
     if overlap_pairs:
-        pairs_str = ", ".join(f"**{p[0]}** + **{p[1]}**" for p in overlap_pairs)
-        st.warning(
-            f"⚠️ **Overlap detected:** {pairs_str}. "
-            f"These assets share underlying holdings (e.g. World Equity contains ~65% US stocks). "
-            f"Your effective exposure to the overlapping region is higher than the weights suggest. "
-            f"This is fine if intentional — just be aware."
-        )
+        # Filter out World/US pair — handled cleanly by the equity mode toggle above
+        unhandled = [p for p in overlap_pairs
+                     if not (set(p) <= {"World Equity", "US Equity"})]
+        if unhandled:
+            pairs_str = ", ".join(f"**{p[0]}** + **{p[1]}**" for p in unhandled)
+            st.warning(
+                f"⚠️ **Overlap detected:** {pairs_str}. "
+                f"These assets share underlying holdings. "
+                f"Your effective exposure to the overlapping region is higher than the weights suggest. "
+                f"This is fine if intentional — just be aware."
+            )
 
 # Rebuild correlation matrix only when selection changes
 sel_key = tuple(sorted(selected_assets))
@@ -1388,6 +1493,60 @@ if "results" in st.session_state:
   <div class="metric-tooltip" style="font-size:12px;color:#9ca3af;margin-top:4px;line-height:1.5">{tooltip}</div>
   {"<div class='metric-delta'>"+delta+"</div>" if delta else ""}
 </div>""", unsafe_allow_html=True)
+
+        # ── Effective Regional Exposure ───────────────────────
+        st.divider()
+        st.subheader("Effective Regional Exposure")
+        st.caption(
+            "Actual geographic exposure after looking through each ETF. "
+            "World Equity (65% US) + US Equity = heavily US-concentrated even if weights look balanced."
+        )
+        eff_exp = compute_effective_exposure(w, assets)
+        if eff_exp:
+            us_exp = eff_exp.get("US", 0.0)
+            if us_exp > 0.50:
+                st.error(
+                    f"US concentration: {us_exp*100:.1f}% of your portfolio is effectively US-exposed "
+                    f"(direct + via World Equity, REIT, Corp Bonds etc). "
+                    f"Consider replacing World Equity with Europe/Japan/Pacific, or reducing US Equity."
+                )
+            elif us_exp > 0.35:
+                st.warning(
+                    f"US exposure: {us_exp*100:.1f}% — meaningful. Includes indirect exposure "
+                    f"via World Equity and sector ETFs."
+                )
+
+            col_exp1, col_exp2 = st.columns([2, 3])
+            with col_exp1:
+                exp_df = pd.DataFrame([
+                    {"Region": r, "Effective %": v}
+                    for r, v in eff_exp.items()
+                ])
+                st.dataframe(
+                    exp_df.style.format({"Effective %": "{:.1%}"})
+                    .bar(subset=["Effective %"], color="#1e3a5f"),
+                    use_container_width=True, hide_index=True
+                )
+            with col_exp2:
+                fig_exp = go.Figure(go.Bar(
+                    x=list(eff_exp.keys()),
+                    y=[v*100 for v in eff_exp.values()],
+                    marker=dict(
+                        color=[v*100 for v in eff_exp.values()],
+                        colorscale=[[0,"#1e3a5f"],[0.5,"#1e40af"],[1,"#ef4444"]],
+                        showscale=False,
+                    ),
+                    text=[f"{v*100:.1f}%" for v in eff_exp.values()],
+                    textposition="outside",
+                ))
+                fig_exp.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#94a3b8", size=11),
+                    yaxis=dict(ticksuffix="%", gridcolor="#1e2130"),
+                    xaxis=dict(gridcolor="#1e2130"),
+                    height=280, margin=dict(t=20,b=20,l=10,r=10),
+                )
+                st.plotly_chart(fig_exp, use_container_width=True)
 
         # ── Alternative Portfolio Comparison ──────────────────
         alts = R.get("alternatives", [])
