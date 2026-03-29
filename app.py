@@ -1948,9 +1948,9 @@ from its target weight. This is a rules-based trigger — not a market call.
                     search_url = f"https://www.justetf.com/en/search.html?search=ETF&query={enc}"
                     result["url"] = search_url
 
-                # ── Known ISIN lookup table (common UCITS ETFs) ──────────
-                    # Reliable fallback — no parsing needed for these
-                    KNOWN_ISINS = {
+                # ── Known ISIN lookup table — check this FIRST ────────────
+                # Reliable hardcoded data, no scraping needed for common ETFs
+                KNOWN_ISINS = {
                         # World / All-world
                         "IE00B4L5Y983": ("iShares Core MSCI World UCITS ETF (IWDA)", 0.20, "World Equity"),
                         "IE00B3RBWM25": ("Vanguard FTSE All-World UCITS ETF (VWRL)", 0.22, "World Equity"),
@@ -1994,17 +1994,17 @@ from its target weight. This is a rules-based trigger — not a market call.
                     }
 
                     # Check known ISIN first — most reliable
-                    isin_upper = query.upper().replace(" ", "")
-                    if isin_upper in KNOWN_ISINS:
-                        name, ter, ac = KNOWN_ISINS[isin_upper]
-                        result.update({
-                            "success": True, "name": name,
-                            "ter": ter, "asset_class": ac,
-                            "isin": isin_upper, "source": "known_db"
-                        })
-                    else:
-                        # Fall back to justETF scrape
-                        try:
+                isin_upper = query.upper().replace(" ", "")
+                if isin_upper in KNOWN_ISINS:
+                    name, ter, ac = KNOWN_ISINS[isin_upper]
+                    result.update({
+                        "success": True, "name": name,
+                        "ter": ter, "asset_class": ac,
+                        "isin": isin_upper, "source": "known_db"
+                    })
+                else:
+                    # Fall back to justETF scrape
+                    try:
                             req = urllib.request.Request(
                                 search_url,
                                 headers={
@@ -2086,8 +2086,8 @@ from its target weight. This is a rules-based trigger — not a market call.
                                 if holdings_list:
                                     result["top_holdings"] = holdings_list
 
-                        except Exception as e:
-                            result["error"] = str(e)
+                    except Exception as e:
+                        result["error"] = str(e)
 
             # Show result
             if result["success"]:
