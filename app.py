@@ -153,6 +153,11 @@ ASSUMPTIONS = {
         "paths": 2000,
         "t_df": 5,               # degrees of freedom for fat-tailed draws
     },
+    # Drawdown guardrail: no portfolio (including spicy ones) should have a
+    # simulated worst-year loss (5th pct across paths) worse than this.
+    # Principle: asymmetric ambition — upside optionality, not catastrophic downside.
+    "max_acceptable_worst_year": -0.35,   # -35% worst year at 5th percentile
+    "guardrail_warning_threshold": -0.25, # -25% triggers a yellow warning
     "safe_withdrawal_rate": 0.04,
     "rebalance_drift_threshold": 0.05,  # trigger rebalance when asset drifts >5%
     "return_scenarios": {
@@ -551,6 +556,26 @@ def sensitivity_analysis(names, target_r, scenario, years, initial, monthly, con
     return results
 
 
+def check_drawdown_guardrail(port_v, port_r, shared_shocks, years, initial, monthly, growth):
+    """
+    Check if a portfolio breaches the drawdown guardrail.
+    Returns (passes: bool, worst_year_loss: float, severity: str)
+    Severity: "ok" | "warning" | "breach"
+    """
+    paths = simulate_paths(port_r, port_v, years, initial, monthly, growth,
+                           crisis=False, precomputed_shocks=shared_shocks)
+    wy = worst_year_loss(paths)
+    limit   = ASSUMPTIONS["max_acceptable_worst_year"]
+    warning = ASSUMPTIONS["guardrail_warning_threshold"]
+
+    if wy < limit:
+        return False, wy, "breach"
+    elif wy < warning:
+        return True, wy, "warning"
+    else:
+        return True, wy, "ok"
+
+
 def rebalance_triggers(weights, names, current_vals):
     """Flag assets that have drifted beyond threshold."""
     total = sum(current_vals.values())
@@ -732,7 +757,10 @@ def find_alternative_portfolios(names, target_r, n_alternatives=6, sharpe_tol=0.
         },
         {
             # Max entropy — spread as evenly as possible
+            # Marked analytical_only: shown in comparison table but not in the
+            # active portfolio selector — equal weight != risk-diversified
             "name": "max_diversified",
+            "analytical_only": True,
             "objective": lambda w: np.sum(w**2) - 0.3 * (-np.sum(w * np.log(w + 1e-10))),
             "floors": {},
             "seed": np.ones(n) / n,
@@ -1068,12 +1096,23 @@ if st.button("🏗️  Build Plan", type="primary") and selected_assets:
         with st.spinner("Finding alternative portfolio structures..."):
             alternatives = find_alternative_portfolios(selected_assets, target)
 
+        # Run drawdown guardrail check on each alternative
+        guardrail_results = {}
+        for alt in alternatives:
+            passes, wy, severity = check_drawdown_guardrail(
+                alt["port_v"], alt["port_r"] * ASSUMPTIONS["return_scenarios"][scenario],
+                shared_shocks, years, initial, monthly, growth
+            )
+            alt["guardrail_passes"]  = passes
+            alt["guardrail_wy"]      = wy
+            alt["guardrail_severity"]= severity
+
         st.session_state["results"] = {
             "w": w, "port_r": port_r, "port_v": port_v,
             "paths_base": paths_base, "paths_crisis": paths_crisis,
             "assets": selected_assets, "sens": sens,
             "alternatives": alternatives,
-            "shared_shocks": shared_shocks,  # passed to alternatives for fair comparison
+            "shared_shocks": shared_shocks,
         }
 
 # ============================================================
@@ -1110,27 +1149,69 @@ if "results" in st.session_state:
     # ── Resolve active portfolio selection ───────────────────────────────────
     # Build all_opts early so the radio widget can be shown above the plan table
     alts_early = R.get("alternatives", [])
+    # Separate selectable vs analytical-only alternatives
+    selectable_alts = [a for a in alts_early if not a.get("analytical_only", False)]
+    all_alts_incl   = alts_early  # keep all for comparison table
+
     all_opts_early = [{"label": "★ Optimal", "weights": w,
                         "port_r": port_r, "port_v": port_v,
-                        "sharpe": (port_r - 0.02) / port_v if port_v > 0 else 0}] + alts_early
+                        "sharpe": (port_r - 0.02) / port_v if port_v > 0 else 0,
+                        "analytical_only": False}] + selectable_alts
 
     # Portfolio selector — lives above everything, drives all downstream metrics
-    sel_labels = [o["label"] for o in all_opts_early]
+    # Append guardrail indicator to labels in selector
+    limit   = ASSUMPTIONS["max_acceptable_worst_year"]
+    warning = ASSUMPTIONS["guardrail_warning_threshold"]
+    for o in all_opts_early:
+        wy  = o.get("guardrail_wy", None)
+        sev = o.get("guardrail_severity", "ok")
+        if wy is not None:
+            if sev == "breach":
+                o["label_display"] = o["label"] + "  🔴"
+            elif sev == "warning":
+                o["label_display"] = o["label"] + "  🟡"
+            else:
+                o["label_display"] = o["label"] + "  🟢"
+        else:
+            o["label_display"] = o["label"]
+    # Optimal portfolio gets its own guardrail check from main paths
+    opt_wy = worst_year_loss(maybe_deflate(paths_b))
+    all_opts_early[0]["guardrail_wy"] = opt_wy
+    all_opts_early[0]["guardrail_severity"] = (
+        "breach"  if opt_wy < limit else
+        "warning" if opt_wy < warning else "ok"
+    )
+    all_opts_early[0]["label_display"] = (
+        "★ Optimal  🔴" if opt_wy < limit else
+        "★ Optimal  🟡" if opt_wy < warning else
+        "★ Optimal  🟢"
+    )
+    sel_labels = [o["label_display"] for o in all_opts_early]
     active_key = st.session_state.get("active_portfolio_label", "★ Optimal")
     if active_key not in sel_labels:
         active_key = sel_labels[0]
 
     st.markdown("### Active Portfolio")
-    chosen_label_top = st.radio(
+    # Map display labels back to portfolio objects
+    display_to_opt = {o["label_display"]: o for o in all_opts_early}
+    active_display = st.session_state.get("active_portfolio_display", sel_labels[0])
+    if active_display not in sel_labels:
+        active_display = sel_labels[0]
+
+    chosen_display = st.radio(
         "Select portfolio to view across all tabs:",
         sel_labels,
-        index=sel_labels.index(active_key),
+        index=sel_labels.index(active_display),
         horizontal=True,
         key="active_portfolio_radio",
-        help="Switching here updates the plan table, metrics, projection and risk tabs to reflect the selected portfolio."
+        help=(
+            "🟢 within guardrail  🟡 high volatility warning  🔴 breaches drawdown guardrail. "
+            "Switching updates plan, metrics, projection and risk tabs."
+        )
     )
-    st.session_state["active_portfolio_label"] = chosen_label_top
-    active = next(o for o in all_opts_early if o["label"] == chosen_label_top)
+    st.session_state["active_portfolio_display"] = chosen_display
+    active = display_to_opt[chosen_display]
+    st.session_state["active_portfolio_label"] = active["label"]
 
     # Override active portfolio variables — everything downstream uses these
     w_active      = active["weights"]
@@ -1138,9 +1219,28 @@ if "results" in st.session_state:
     port_v_active = active["port_v"]
     sharpe_active = active["sharpe"]
 
-    if chosen_label_top != "★ Optimal":
+    active_label = active["label"]
+    active_sev   = active.get("guardrail_severity", "ok")
+    active_wy    = active.get("guardrail_wy", None)
+
+    if active_sev == "breach":
+        st.error(
+            f"🔴 **Drawdown guardrail breached** — **{active_label}** has a simulated "
+            f"worst-year loss of **{active_wy*100:.1f}%** (5th percentile), exceeding the "
+            f"{int(abs(ASSUMPTIONS['max_acceptable_worst_year']*100))}% limit. "
+            f"This portfolio can cause significant real-money loss in bad years. "
+            f"Consider reducing Alt/Equity exposure or selecting a less aggressive philosophy."
+        )
+    elif active_sev == "warning":
+        st.warning(
+            f"🟡 **High volatility warning** — **{active_label}** has a simulated "
+            f"worst-year loss of **{active_wy*100:.1f}%** (5th percentile). "
+            f"This is within the guardrail but expect uncomfortable years. "
+            f"Ensure your investment horizon and cash reserves can absorb this."
+        )
+    elif active_label != "★ Optimal":
         st.info(
-            f"Viewing **{chosen_label_top}** — all metrics, projections and risk figures "
+            f"Viewing **{active_label}** — all metrics, projections and risk figures "
             f"below reflect this portfolio. Return to **★ Optimal** to see the base plan."
         )
 
@@ -1191,23 +1291,38 @@ if "results" in st.session_state:
 
     # ── TAB 1: PLAN ──────────────────────────────────────────
     with tab_plan:
+        # Compute risk contribution for active portfolio
+        _df_lu  = st.session_state["asset_settings"].set_index("Asset")
+        _vols_a = np.array([_df_lu.loc[a, "vol"] for a in assets])
+        _corr_a = st.session_state["corr_override"].loc[assets, assets].values
+        _cov_a  = np.diag(_vols_a) @ _corr_a @ np.diag(_vols_a)
+        _rc     = (w * (_cov_a @ w)) / (port_v ** 2 + 1e-10)
+
         plan_df = pd.DataFrame({
-            "Asset":      assets,
-            "Weight":     w,
-            "Category":   [ASSETS[a]["cat"] for a in assets],
-            "Invest Now": w * initial,
-            "Monthly":    w * monthly,
+            "Asset":        assets,
+            "Weight":       w,
+            "Category":     [ASSETS[a]["cat"] for a in assets],
+            "Risk Contrib": _rc,
+            "Invest Now":   w * initial,
+            "Monthly":      w * monthly,
         })
         plan_df = plan_df[plan_df["Weight"] > 0.005].sort_values("Weight", ascending=False)
 
         st.dataframe(
             plan_df.style.format({
-                "Weight":     "{:.1%}",
-                "Invest Now": "€{:,.0f}",
-                "Monthly":    "€{:,.0f}",
-            }).bar(subset=["Weight"], color="#1e3a5f"),
+                "Weight":       "{:.1%}",
+                "Risk Contrib": "{:.1%}",
+                "Invest Now":   "€{:,.0f}",
+                "Monthly":      "€{:,.0f}",
+            }).bar(subset=["Weight"], color="#1e3a5f"
+            ).bar(subset=["Risk Contrib"], color="#7f1d1d"),
             use_container_width=True,
             hide_index=True,
+        )
+        st.caption(
+            "**Risk Contrib** = % of total portfolio variance each asset contributes. "
+            "A 5% weight with 20% risk contribution means that asset punches above its weight — "
+            "useful for spotting hidden concentration (e.g. Crypto at 5% weight, 25%+ risk)."
         )
 
         # Category breakdown
@@ -1284,7 +1399,10 @@ if "results" in st.session_state:
                 "side-by-side so you can compare before choosing. "
                 "Worst single year = empirical 1-in-20 year loss from simulation."
             )
-            all_opts = all_opts_early  # already built above
+            # Comparison table shows ALL alternatives including analytical-only
+            all_opts = [{"label": "★ Optimal", "weights": w,
+                          "port_r": port_r, "port_v": port_v,
+                          "sharpe": (port_r - 0.02) / port_v if port_v > 0 else 0}] + all_alts_incl
             chosen   = active          # driven by top radio
 
             col_cmp1, col_cmp2 = st.columns([3, 2])
@@ -1329,6 +1447,8 @@ if "results" in st.session_state:
                         marker_color=colors_cmp[ci % len(colors_cmp)],
                         opacity=0.85,
                     ))
+                    o_sev = o.get("guardrail_severity", "ok")
+                    guardrail_icon = {"ok": "🟢", "warning": "🟡", "breach": "🔴"}.get(o_sev, "")
                     summary_rows.append({
                         "Portfolio":          o["label"],
                         "Return":             f"{o['port_r']*100:.2f}%",
@@ -1336,7 +1456,8 @@ if "results" in st.session_state:
                         "Sharpe":             f"{o['sharpe']:.2f}",
                         f"Median{label_sfx}": f"EUR {p50_val:,.0f}",
                         f"Worst 10%{label_sfx}": f"EUR {p10_val:,.0f}",
-                        "Worst single year":  f"{wy_loss*100:.1f}%",
+                        "Worst year (5th pct)": f"{wy_loss*100:.1f}%",
+                        "Guardrail":          guardrail_icon,
                     })
 
                 fig_cmp.update_layout(
