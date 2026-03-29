@@ -592,17 +592,23 @@ def _dynamic_label(w_c, names, cat_map):
     cash= cat_w("Cash")
 
     # Dominant philosophy based on actual weights
-    if eq >= 0.65:
+    if alt >= 0.20:
+        return "Moonshot (High Alt)"
+    elif alt >= 0.12 and eq >= 0.45:
+        return "Growth + Alt Satellite"
+    elif alt >= 0.10:
+        return "Alt Satellite"
+    elif eq >= 0.65:
         return "Equity Dominant"
     elif eq >= 0.50 and bn <= 0.20:
         return "Growth Tilt"
-    elif bn >= 0.35:
-        return "Defensive / Bond Heavy"
-    elif re >= 0.25:
+    elif re >= 0.28:
+        return "Inflation Hedge"
+    elif re >= 0.20 and eq >= 0.30:
         return "Real Asset Tilt"
-    elif alt >= 0.12:
-        return "Alt Satellite"
-    elif eq >= 0.40 and bn >= 0.25:
+    elif bn >= 0.40:
+        return "Defensive / Bond Heavy"
+    elif bn >= 0.25 and eq >= 0.35 and eq <= 0.62:
         return "Balanced"
     elif cash >= 0.15:
         return "Capital Preservation"
@@ -610,7 +616,10 @@ def _dynamic_label(w_c, names, cat_map):
         return "Diversified"
 
 
-def find_alternative_portfolios(names, target_r, n_alternatives=4, sharpe_tol=0.10):
+def find_alternative_portfolios(names, target_r, n_alternatives=5, sharpe_tol=0.18):
+    # Higher sharpe_tol: satellite/moonshot portfolios intentionally sacrifice
+    # some Sharpe efficiency for asymmetric return potential. We want to show
+    # these even if they're 0.15 Sharpe below optimal.
     """
     Generate structurally distinct portfolios with similar risk/return.
 
@@ -723,6 +732,56 @@ def find_alternative_portfolios(names, target_r, n_alternatives=4, sharpe_tol=0.
             "floors": {},
             "seed": np.ones(n) / n,
         },
+        {
+            # Satellite: Crypto/Alt at meaningful weight alongside solid core
+            # Hard floor on Alt — forces the optimizer to actually use it
+            # This is the "small bet, asymmetric upside" option
+            "name": "alt_satellite",
+            "objective": lambda w: -((w @ rets - rf) / (np.sqrt(w.T @ cov @ w + 1e-10))) + 0.08 * np.sum(w**2),
+            "floors": {
+                "Alt":    min(0.10, ASSUMPTIONS["category_caps"].get("Alt", 0.20)),
+                "Equity": min(0.40, ASSUMPTIONS["category_caps"].get("Equity", 0.70)),
+            },
+            "seed": (lambda s: (
+                s.__setitem__(slice(None), 0.02),
+                [s.__setitem__(i, 0.12) for i in cat_map.get("Alt", [])],
+                [s.__setitem__(i, 0.10) for i in cat_map.get("Equity", [])],
+                s.__itruediv__(s.sum()), s)[-1]
+            )(np.ones(n) * 0.02),
+        },
+        {
+            # Moonshot: maximise return directly (not Sharpe), satellite Alt mandatory
+            # This is the highest-return feasible portfolio — accepts much higher vol
+            # Hard floor on Alt at cap limit, equity at cap limit
+            # No diversification penalty — let the optimizer concentrate if return demands it
+            "name": "moonshot",
+            "objective": lambda w: -(w @ rets),  # pure return maximisation
+            "floors": {
+                "Alt":    min(0.15, ASSUMPTIONS["category_caps"].get("Alt", 0.20)),
+                "Equity": min(0.55, ASSUMPTIONS["category_caps"].get("Equity", 0.70)),
+            },
+            "seed": (lambda s: (
+                s.__setitem__(slice(None), 0.01),
+                [s.__setitem__(i, 0.15) for i in cat_map.get("Alt", [])],
+                [s.__setitem__(i, 0.14) for i in cat_map.get("Equity", [])],
+                s.__itruediv__(s.sum()), s)[-1]
+            )(np.ones(n) * 0.01),
+        },
+        {
+            # Real Asset / Inflation hedge: meaningful gold, REIT, commodities
+            # Useful if you believe inflation stays elevated or want hard asset exposure
+            "name": "inflation_hedge",
+            "objective": lambda w: -((w @ rets - rf) / (np.sqrt(w.T @ cov @ w + 1e-10))) + 0.10 * np.sum(w**2),
+            "floors": {
+                "Real":   min(0.25, ASSUMPTIONS["category_caps"].get("Real", 0.40)),
+                "Equity": min(0.30, ASSUMPTIONS["category_caps"].get("Equity", 0.70)),
+            },
+            "seed": (lambda s: (
+                s.__setitem__(slice(None), 0.02),
+                [s.__setitem__(i, 0.13) for i in cat_map.get("Real", [])],
+                s.__itruediv__(s.sum()), s)[-1]
+            )(np.ones(n) * 0.02),
+        },
     ]
 
     np.random.seed(42)
@@ -782,7 +841,7 @@ def find_alternative_portfolios(names, target_r, n_alternatives=4, sharpe_tol=0.
         if not kept:
             kept.append(c); continue
         min_dist = min(np.sum(np.abs(c["weights"] - k["weights"])) for k in kept)
-        if min_dist > 0.12:
+        if min_dist > 0.10:  # slightly tighter to allow more variety
             kept.append(c)
         if len(kept) >= n_alternatives:
             break
