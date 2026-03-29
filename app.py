@@ -306,11 +306,12 @@ def optimize_portfolio(names, target_r, scenario):
         cat_map_diag = {cat: [] for cat in ASSUMPTIONS["category_caps"]}
         for i, a in enumerate(names):
             cat_map_diag[ASSETS[a]["cat"]].append(i)
-        # Find unconstrained max return
-        max_uncapped = float(np.max(rets_diag))
+        # Diagnostic uses raw returns (consistent with constraint semantics post shrinkage-fix)
+        raw_rets_diag = get_base_returns(names)
+        max_uncapped = float(np.max(raw_rets_diag))
         # Find max under category caps only (no return target)
         res_diag = minimize(
-            lambda w: -(w @ rets_diag),
+            lambda w: -(w @ raw_rets_diag),
             np.ones(len(names))/len(names),
             bounds=[(0, ASSUMPTIONS["optimizer"]["max_asset_weight"])]*len(names),
             constraints=[{"type":"eq","fun":lambda w: np.sum(w)-1}] + [
@@ -320,7 +321,7 @@ def optimize_portfolio(names, target_r, scenario):
             ],
             method="SLSQP"
         )
-        max_under_caps = float(-(res_diag.fun)) if res_diag.success else max_uncapped
+        max_under_caps = float(-(res_diag.fun)) if res_diag.success else max_uncapped  # raw return ceiling
         # Identify which cap is binding
         binding = []
         if res_diag.success:
@@ -540,7 +541,7 @@ if selected_assets:
         df_lu.loc[selected_assets, "return"].values * ASSUMPTIONS["return_scenarios"][scenario]
     ) + (1 - shrink) * target
     if target > scaled_max:
-        st.error(f"⚠️ Target {target_pct}% exceeds the highest available return ({scaled_max*100:.1f}%) under '{scenario}' scenario. Lower target or enable higher-return assets.")
+        st.error(f"⚠️ Target {target_pct}% exceeds the highest available raw return ({max_avail*100:.1f}%) in your selected assets. Lower target or enable higher-return assets.")
     elif target > 0.08:
         st.warning(f"⚡ {target_pct}% target requires significant Equity/Alt exposure — review category caps in Engine tab.")
 else:
@@ -568,7 +569,7 @@ if st.button("🏗️  Build Plan", type="primary") and selected_assets:
             target  = diag.get("target", target)
             msg = (
                 f"**Optimiser could not meet your {target*100:.1f}% target** under current constraints.\n\n"
-                f"- Maximum achievable return (post-shrinkage, with caps): **{max_r*100:.2f}%**\n"
+                f"- Maximum achievable return (raw, with caps applied): **{max_r*100:.2f}%**\n"
                 f"- Your target exceeds this by **{(target - max_r)*100:.2f}%**\n"
             )
             if binding:
