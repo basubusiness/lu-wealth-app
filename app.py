@@ -480,10 +480,15 @@ if "results" in st.session_state:
 
     # Inflation adjustment
     def maybe_deflate(arr):
-        if show_real:
+        if not show_real:
+            return arr
+        arr = np.array(arr)
+        if arr.ndim == 2:
+            factors = np.array([(1 + inflation) ** t for t in range(arr.shape[1])])
+            return arr / factors[np.newaxis, :]
+        else:
             factors = np.array([(1 + inflation) ** t for t in range(len(arr))])
             return arr / factors
-        return arr
 
     yrs = np.arange(years + 1)
     label_sfx = " (real €)" if show_real else " (nominal €)"
