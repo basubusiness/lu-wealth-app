@@ -436,41 +436,65 @@ def optimize_portfolio(names, target_r, scenario):
     return w, port_r, port_v
 
 
-def simulate_paths(mu, sigma, years, start, monthly, contrib_growth, crisis=False, corr=None, vols=None):
+def generate_shocks(years, sims=None):
+    """
+    Pre-generate standardised t-distributed shocks shared across all simulations.
+    Shape: (sims, years). Apply different (mu, sigma) per portfolio for
+    apples-to-apples comparison — identical market scenarios, different portfolios.
+    This is standard institutional simulation hygiene.
+    """
+    if sims is None:
+        sims = ASSUMPTIONS["simulation"]["paths"]
+    df_t  = ASSUMPTIONS["simulation"]["t_df"]
+    scale = np.sqrt((df_t - 2) / df_t)
+    # Raw standardised draws — mean 0, std ~1
+    return np.random.standard_t(df_t, size=(sims, years)) * scale
+
+
+def simulate_paths(mu, sigma, years, start, monthly, contrib_growth,
+                   crisis=False, precomputed_shocks=None):
     """
     Simulate wealth paths using Student-t shocks (fat tails).
-    In crisis mode: returns compressed, vol inflated, AND cross-asset
-    correlations floored at corr_floor — capturing the real crisis dynamic
-    where diversification breaks down simultaneously.
+
+    If precomputed_shocks provided (shape: sims x years), uses those directly
+    so multiple portfolios see the SAME market scenarios — enabling fair comparison.
+
+    In crisis mode: mu compressed, sigma inflated.
     """
-    sims = ASSUMPTIONS["simulation"]["paths"]
+    sims = precomputed_shocks.shape[0] if precomputed_shocks is not None            else ASSUMPTIONS["simulation"]["paths"]
     df_t = ASSUMPTIONS["simulation"]["t_df"]
 
     if crisis:
-        cr = ASSUMPTIONS["crisis_regime"]
+        cr    = ASSUMPTIONS["crisis_regime"]
         mu    = mu    * cr["return_scale"]
         sigma = sigma * cr["vol_scale"]
-        # Apply correlation spike if covariance components are provided
-        if corr is not None and vols is not None:
-            crisis_corr = np.maximum(corr, cr["corr_floor"])
-            np.fill_diagonal(crisis_corr, 1.0)
-            cov_crisis = np.diag(vols) @ crisis_corr @ np.diag(vols)
-            # Use portfolio-level sigma from crisis cov
-            # (we still simulate as 1D path but with spiked portfolio vol)
-            # Recompute sigma from last known weights is not available here;
-            # vol_scale already handles this conservatively
-            sigma = sigma  # vol_scale applied above; corr spike is additive effect
 
-    scale = np.sqrt((df_t - 2) / df_t)
     paths = np.zeros((sims, years + 1))
     paths[:, 0] = start
 
     for t in range(1, years + 1):
-        shocks  = (mu - 0.5 * sigma**2) + np.random.standard_t(df_t, sims) * sigma * scale
+        if precomputed_shocks is not None:
+            z = precomputed_shocks[:, t - 1]
+        else:
+            scale = np.sqrt((df_t - 2) / df_t)
+            z = np.random.standard_t(df_t, sims) * scale
+
+        shocks  = (mu - 0.5 * sigma**2) + z * sigma
         contrib = monthly * 12 * ((1 + contrib_growth) ** (t - 1))
         paths[:, t] = paths[:, t - 1] * np.exp(shocks) + contrib
 
     return paths
+
+
+def worst_year_loss(paths):
+    """
+    Empirical worst-year loss: median of the worst single-year return
+    across all simulated paths. More intuitive than VaR — answers
+    'in a bad year, how much could I lose?'
+    """
+    yearly_rets = paths[:, 1:] / (paths[:, :-1] + 1e-10) - 1
+    worst_per_path = yearly_rets.min(axis=1)
+    return float(np.percentile(worst_per_path, 5))  # 5th pct = 1-in-20 year event
 
 
 def sensitivity_analysis(names, target_r, scenario, years, initial, monthly, contrib_growth):
@@ -552,86 +576,177 @@ def rebalance_triggers(weights, names, current_vals):
     return pd.DataFrame(rows)
 
 
-def find_alternative_portfolios(names, target_r, n_alternatives=3, sharpe_tol=0.08):
+def _dynamic_label(w_c, names, cat_map):
     """
-    Generate structurally distinct portfolios with similar risk/return profile.
-
-    Strategy: run optimizer repeatedly with different diversity penalties that
-    push it toward different corners of the feasible set. Filter solutions
-    within `sharpe_tol` Sharpe of the best, deduplicate by allocation distance.
-
-    Returns list of dicts: [{weights, port_r, port_v, sharpe, label}, ...]
+    Generate an honest label based on what the portfolio *actually* is,
+    not what the optimizer intended. Reads the realized allocation.
     """
-    df      = st.session_state["asset_settings"].set_index("Asset")
-    vols    = df.loc[names, "vol"].values.astype(float)
+    def cat_w(cat):
+        idx = cat_map.get(cat, [])
+        return float(np.sum(w_c[idx])) if idx else 0.0
+
+    eq  = cat_w("Equity")
+    bn  = cat_w("Bond")
+    re  = cat_w("Real")
+    alt = cat_w("Alt")
+    cash= cat_w("Cash")
+
+    # Dominant philosophy based on actual weights
+    if eq >= 0.65:
+        return "Equity Dominant"
+    elif eq >= 0.50 and bn <= 0.20:
+        return "Growth Tilt"
+    elif bn >= 0.35:
+        return "Defensive / Bond Heavy"
+    elif re >= 0.25:
+        return "Real Asset Tilt"
+    elif alt >= 0.12:
+        return "Alt Satellite"
+    elif eq >= 0.40 and bn >= 0.25:
+        return "Balanced"
+    elif cash >= 0.15:
+        return "Capital Preservation"
+    else:
+        return "Diversified"
+
+
+def find_alternative_portfolios(names, target_r, n_alternatives=4, sharpe_tol=0.10):
+    """
+    Generate structurally distinct portfolios with similar risk/return.
+
+    Key design principle: each philosophy is enforced via HARD minimum
+    constraints on category weights — not just biased seeds. This guarantees
+    labels reflect actual allocation, not optimizer intent.
+
+    Philosophies:
+      1. Max Efficiency    — pure Sharpe, no structural bias
+      2. Defensive         — minimise volatility directly (different objective)
+      3. Equity Growth     — hard floor: equity >= 60%
+      4. Balanced          — hard floors: equity 40-60%, bonds >= 20%
+      5. Real Asset Heavy  — hard floor: real >= 20%
+      6. Max Diversified   — entropy-maximising, no concentration
+
+    Returns list of dicts with tail_p10 included for comparison.
+    """
+    df       = st.session_state["asset_settings"].set_index("Asset")
+    vols     = df.loc[names, "vol"].values.astype(float)
     raw_rets = get_base_returns(names)
-    shrink  = ASSUMPTIONS["optimizer"]["return_shrinkage"]
-    rets    = shrink * np.mean(raw_rets) + (1 - shrink) * raw_rets
-    corr    = st.session_state["corr_override"].loc[names, names].values
-    cov     = np.diag(vols) @ corr @ np.diag(vols)
-    rf      = 0.02
-    n       = len(names)
+    shrink   = ASSUMPTIONS["optimizer"]["return_shrinkage"]
+    rets     = shrink * np.mean(raw_rets) + (1 - shrink) * raw_rets
+    corr     = st.session_state["corr_override"].loc[names, names].values
+    cov      = np.diag(vols) @ corr @ np.diag(vols)
+    rf       = 0.02
+    n        = len(names)
 
     cat_map = {cat: [] for cat in ASSUMPTIONS["category_caps"]}
     for i, a in enumerate(names):
         cat_map[ASSETS[a]["cat"]].append(i)
 
-    base_constraints = [
-        {"type": "eq",   "fun": lambda w: np.sum(w) - 1.0},
-        {"type": "ineq", "fun": lambda w: (w @ raw_rets) - target_r},
-    ]
-    for cat, cap in ASSUMPTIONS["category_caps"].items():
-        idx = cat_map.get(cat, [])
-        if idx:
-            base_constraints.append({
-                "type": "ineq",
-                "fun": lambda w, ix=idx, cap=cap: cap - np.sum(w[ix])
-            })
+    # Base constraints shared across all philosophies
+    def base_cons(extra_min_floors=None, return_override=None):
+        ret_floor = return_override if return_override is not None else target_r
+        cons = [
+            {"type": "eq",   "fun": lambda w: np.sum(w) - 1.0},
+            {"type": "ineq", "fun": lambda w, f=ret_floor: (w @ raw_rets) - f},
+        ]
+        # Category caps (upper bounds)
+        for cat, cap in ASSUMPTIONS["category_caps"].items():
+            idx = cat_map.get(cat, [])
+            if idx:
+                cons.append({"type": "ineq",
+                             "fun": lambda w, ix=idx, c=cap: c - np.sum(w[ix])})
+        # Hard minimum floors for this philosophy
+        if extra_min_floors:
+            for cat, floor in extra_min_floors.items():
+                idx = cat_map.get(cat, [])
+                if idx:
+                    cons.append({"type": "ineq",
+                                 "fun": lambda w, ix=idx, f=floor: np.sum(w[ix]) - f})
+        return cons
 
     global_max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
     bounds = [(0.0, ASSETS[a].get("max_w", global_max_w)) for a in names]
 
-    candidates = []
+    # Define philosophies: (objective_fn, min_floors, seeds)
+    eq_idx   = cat_map.get("Equity", [])
+    bn_idx   = cat_map.get("Bond",   [])
+    re_idx   = cat_map.get("Real",   [])
 
-    # Diversity modes: vary the penalty structure to push toward different solutions
-    # Each mode biases the optimizer toward a different structural outcome
-    diversity_modes = [
-        # (label, hhi_penalty, entropy_bonus, concentration_cap)
-        ("Concentrated",   0.00, 0.00, None),   # pure Sharpe — finds sharpest solution
-        ("Diversified",    0.30, 0.00, None),    # penalise concentration strongly
-        ("Max Spread",     0.00, 0.40, None),    # entropy bonus — spreads weights evenly
-        ("Bond Tilted",    0.15, 0.00, "Bond"),  # bias toward bond-heavy solution
-        ("Real Assets",    0.15, 0.00, "Real"),  # bias toward real asset solution
-        ("Equity Focused", 0.05, 0.00, "Equity"),# bias toward equity-heavy
-        ("Alt Satellite",  0.20, 0.00, "Alt"),   # allow alts to feature more
+    philosophies = [
+        {
+            "name": "max_efficiency",
+            "objective": lambda w: -((w @ rets - rf) / (np.sqrt(w.T @ cov @ w + 1e-10))),
+            "floors": {},
+            "seed": np.ones(n) / n,
+        },
+        {
+            # Different objective: minimise portfolio variance directly
+            # Accepts a lower return floor (target * 0.75) — explicitly trades
+            # return for safety. Label will reflect this honestly.
+            "name": "defensive",
+            "objective": lambda w: np.sqrt(w.T @ cov @ w + 1e-10) * 100,
+            "floors": {"Bond": min(0.30, ASSUMPTIONS["category_caps"].get("Bond", 0.60))},
+            "defensive_return_floor": max(0.015, target_r * 0.75),  # adaptive: 75% of target
+            "seed": (lambda s: (s.__setitem__(slice(None), 0.02), [s.__setitem__(i, 0.15) for i in bn_idx], s.__itruediv__(s.sum()), s)[-1])(np.ones(n) * 0.02) if bn_idx else np.ones(n)/n,
+        },
+        {
+            # Hard equity floor — guaranteed equity-heavy
+            "name": "equity_growth",
+            "objective": lambda w: -((w @ rets - rf) / (np.sqrt(w.T @ cov @ w + 1e-10))) + 0.05 * np.sum(w**2),
+            "floors": {"Equity": min(0.60, ASSUMPTIONS["category_caps"].get("Equity", 0.70))},
+            "seed": (lambda s: (s.__setitem__(slice(None), 0.01), [s.__setitem__(i, 0.18) for i in eq_idx], s.__itruediv__(s.sum()), s)[-1])(np.ones(n) * 0.01) if eq_idx else np.ones(n)/n,
+        },
+        {
+            # Balanced: equity + bond ranges (floor AND ceiling)
+            # Two-sided constraints give Balanced a real structural identity
+            "name": "balanced",
+            "objective": lambda w: -((w @ rets - rf) / (np.sqrt(w.T @ cov @ w + 1e-10))) + 0.15 * np.sum(w**2),
+            "floors": {
+                "Equity": min(0.35, ASSUMPTIONS["category_caps"].get("Equity", 0.70)),
+                "Bond":   min(0.20, ASSUMPTIONS["category_caps"].get("Bond",   0.60)),
+            },
+            # Equity ceiling enforced separately below
+            "equity_ceiling": 0.60,
+            "seed": np.ones(n) / n,
+        },
+        {
+            # Real asset tilt — hard floor on real assets
+            "name": "real_assets",
+            "objective": lambda w: -((w @ rets - rf) / (np.sqrt(w.T @ cov @ w + 1e-10))) + 0.10 * np.sum(w**2),
+            "floors": {"Real": min(0.20, ASSUMPTIONS["category_caps"].get("Real", 0.40))},
+            "seed": (lambda s: (s.__setitem__(slice(None), 0.02), [s.__setitem__(i, 0.15) for i in re_idx], s.__itruediv__(s.sum()), s)[-1])(np.ones(n) * 0.02) if re_idx else np.ones(n)/n,
+        },
+        {
+            # Max entropy — spread as evenly as possible
+            "name": "max_diversified",
+            "objective": lambda w: np.sum(w**2) - 0.3 * (-np.sum(w * np.log(w + 1e-10))),
+            "floors": {},
+            "seed": np.ones(n) / n,
+        },
     ]
 
     np.random.seed(42)
-    for label, hhi_pen, entropy_bon, bias_cat in diversity_modes:
-        # Build biased starting seed
-        if bias_cat and cat_map.get(bias_cat):
-            seed = np.ones(n) * 0.02
-            for idx in cat_map[bias_cat]:
-                seed[idx] = 0.15
-            seed /= seed.sum()
-        else:
-            seed = np.ones(n) / n
+    candidates = []
 
-        def objective(w, h=hhi_pen, e=entropy_bon):
-            port_ret = w @ rets
-            port_vol = np.sqrt(w.T @ cov @ w + 1e-10)
-            sharpe   = (port_ret - rf) / port_vol
-            hhi      = np.sum(w ** 2)           # Herfindahl — penalise concentration
-            entropy  = -np.sum(w * np.log(w + 1e-10))  # entropy bonus
-            return -sharpe + h * hhi - e * entropy
-
-        # Try multiple seeds for robustness
+    for phil in philosophies:
+        # Defensive uses a lower return floor — explicitly trades return for safety
+        effective_target = phil.get("defensive_return_floor", target_r)
+        cons = base_cons(phil["floors"], return_override=effective_target)
+        # Two-sided equity constraint for Balanced
+        if phil.get("equity_ceiling") and eq_idx:
+            eq_ceil = phil["equity_ceiling"]
+            cons.append({"type": "ineq",
+                         "fun": lambda w, ix=eq_idx, c=eq_ceil: c - np.sum(w[ix])})
+        obj  = phil["objective"]
         best = None
-        for s in [seed, np.random.dirichlet(np.ones(n)), np.ones(n)/n]:
-            res = minimize(objective, s, bounds=bounds, constraints=base_constraints,
-                           method="SLSQP", options={"maxiter": 800, "ftol": 1e-8})
-            if res.success and (best is None or res.fun < best.fun):
-                best = res
+        for s in [phil["seed"], np.random.dirichlet(np.ones(n)), np.ones(n)/n]:
+            try:
+                res = minimize(obj, s, bounds=bounds, constraints=cons,
+                               method="SLSQP", options={"maxiter": 1000, "ftol": 1e-9})
+                if res.success and (best is None or res.fun < best.fun):
+                    best = res
+            except Exception:
+                continue
 
         if best is None or not best.success:
             continue
@@ -642,30 +757,32 @@ def find_alternative_portfolios(names, target_r, n_alternatives=3, sharpe_tol=0.
             continue
         w_c /= np.sum(w_c)
 
-        pr = w_c @ rets
-        pv = np.sqrt(w_c.T @ cov @ w_c)
-        sh = (pr - rf) / pv if pv > 0 else 0
+        pr  = w_c @ rets
+        pv  = np.sqrt(w_c.T @ cov @ w_c)
+        sh  = (pr - rf) / pv if pv > 0 else 0
+
+        # Honest label from actual allocation
+        label = _dynamic_label(w_c, names, cat_map)
 
         candidates.append({
             "weights": w_c, "port_r": pr, "port_v": pv,
             "sharpe": sh, "label": label,
+            "philosophy": phil["name"],
         })
 
     if not candidates:
         return []
 
-    # Find best Sharpe and filter within tolerance
+    # Filter: keep within sharpe_tol of best, then deduplicate by L1 > 0.12
     best_sharpe = max(c["sharpe"] for c in candidates)
     filtered    = [c for c in candidates if c["sharpe"] >= best_sharpe - sharpe_tol]
 
-    # Deduplicate: keep solutions that differ by >15% L1 distance from already-kept ones
     kept = []
     for c in sorted(filtered, key=lambda x: -x["sharpe"]):
         if not kept:
-            kept.append(c)
-            continue
+            kept.append(c); continue
         min_dist = min(np.sum(np.abs(c["weights"] - k["weights"])) for k in kept)
-        if min_dist > 0.15:
+        if min_dist > 0.12:
             kept.append(c)
         if len(kept) >= n_alternatives:
             break
@@ -813,12 +930,17 @@ if st.button("🏗️  Build Plan", type="primary") and selected_assets:
         else:
             st.error("Optimiser failed — target may be infeasible. Try lowering target or enabling more assets.")
     else:
-        with st.spinner("Running Monte Carlo (2 000 paths × 2 regimes)..."):
-            # Apply scenario scaling to mu only (weights unchanged across scenarios)
+        with st.spinner("Running Monte Carlo (2 000 paths x 2 regimes)..."):
+            # Generate shocks once — reused across main + crisis + alternatives
+            # Same market scenarios, different portfolios = fair comparison
+            shared_shocks = generate_shocks(years)
             scenario_scale = ASSUMPTIONS["return_scenarios"][scenario]
             sim_mu = port_r * scenario_scale
-            paths_base   = simulate_paths(sim_mu, port_v, years, initial, monthly, growth, crisis=False)
-            paths_crisis = simulate_paths(sim_mu, port_v, years, initial, monthly, growth, crisis=True)
+            paths_base   = simulate_paths(sim_mu, port_v, years, initial, monthly, growth,
+                                          crisis=False, precomputed_shocks=shared_shocks)
+            crisis_shocks = generate_shocks(years)  # crisis gets own draws (different regime)
+            paths_crisis = simulate_paths(sim_mu, port_v, years, initial, monthly, growth,
+                                          crisis=True, precomputed_shocks=crisis_shocks)
 
         # Sensitivity analysis (±1% on returns)
         sens = sensitivity_analysis(selected_assets, target, scenario, years, initial, monthly, growth)
@@ -832,6 +954,7 @@ if st.button("🏗️  Build Plan", type="primary") and selected_assets:
             "paths_base": paths_base, "paths_crisis": paths_crisis,
             "assets": selected_assets, "sens": sens,
             "alternatives": alternatives,
+            "shared_shocks": shared_shocks,  # passed to alternatives for fair comparison
         }
 
 # ============================================================
@@ -985,8 +1108,9 @@ if "results" in st.session_state:
             st.divider()
             st.subheader("Alternative Portfolio Structures")
             st.caption(
-                "Same target return, similar Sharpe — but structurally different. "
-                "Each reflects a different philosophy. Pick the one that matches your conviction."
+                "Similar efficiency, different trade-offs — each portfolio enforces a distinct "
+                "structural philosophy via hard constraints. Labels reflect actual allocation, "
+                "not intent. Worst single year = empirical 1-in-20 year loss from simulation."
             )
 
             # Build comparison table
@@ -1012,41 +1136,80 @@ if "results" in st.session_state:
                 st.dataframe(cmp_df.set_index("Asset"), use_container_width=True)
 
             with col_cmp2:
-                # Radar / bar comparison of key stats
-                fig_cmp = go.Figure()
+                # Compute tail p10 for each alternative via quick simulation
+                scenario_scale = ASSUMPTIONS["return_scenarios"][scenario]
                 colors_cmp = ["#60a5fa","#4ade80","#f59e0b","#f87171","#a78bfa","#34d399","#fb923c"]
+
+                fig_cmp = go.Figure()
+                summary_rows = []
+                shared_shocks_ui = R.get("shared_shocks", None)
                 for ci, o in enumerate(all_opts):
+                    # Reuse shared shocks — same market scenarios across all portfolios
+                    # This gives apples-to-apples comparison of philosophies
+                    sim_mu_o  = o["port_r"] * scenario_scale
+                    tail_paths = simulate_paths(sim_mu_o, o["port_v"], years,
+                                                initial, monthly, growth, crisis=False,
+                                                precomputed_shocks=shared_shocks_ui)
+                    tail_paths = maybe_deflate(tail_paths)
+                    p10_val   = float(np.percentile(tail_paths[:, -1], 10))
+                    p50_val   = float(np.percentile(tail_paths[:, -1], 50))
+                    wy_loss   = worst_year_loss(tail_paths)
+                    o["tail_p10"]       = p10_val
+                    o["tail_p50"]       = p50_val
+                    o["worst_year"]     = wy_loss
+
                     fig_cmp.add_trace(go.Bar(
                         name=o["label"],
-                        x=["Return", "Volatility", "Sharpe×10"],
-                        y=[o["port_r"]*100, o["port_v"]*100, o["sharpe"]*10],
+                        x=["Return %", "Vol %", "Sharpe", "Worst 10% (kEUR)"],
+                        y=[o["port_r"]*100, o["port_v"]*100,
+                           o["sharpe"], p10_val/1000],
                         marker_color=colors_cmp[ci % len(colors_cmp)],
                         opacity=0.85,
                     ))
+                    summary_rows.append({
+                        "Portfolio":          o["label"],
+                        "Return":             f"{o['port_r']*100:.2f}%",
+                        "Vol":                f"{o['port_v']*100:.1f}%",
+                        "Sharpe":             f"{o['sharpe']:.2f}",
+                        f"Median{label_sfx}": f"EUR {p50_val:,.0f}",
+                        f"Worst 10%{label_sfx}": f"EUR {p10_val:,.0f}",
+                        "Worst single year":  f"{wy_loss*100:.1f}%",
+                    })
+
                 fig_cmp.update_layout(
                     barmode="group",
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     font=dict(color="#94a3b8", size=11),
                     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=9)),
-                    height=260,
+                    height=280,
                     margin=dict(t=10, b=10, l=10, r=10),
                     yaxis=dict(gridcolor="#1e2130"),
                 )
                 st.plotly_chart(fig_cmp, use_container_width=True)
 
-                # Key stats for chosen
+            # Full comparison summary table below
+            st.caption("Tail outcomes computed via Monte Carlo — Worst 10% = the outcome in the worst 1-in-10 scenario.")
+            summary_df = pd.DataFrame(summary_rows).set_index("Portfolio")
+            st.dataframe(summary_df, use_container_width=True)
+
+            # Stats for chosen
+            if "tail_p10" in chosen:
+                chosen_tail = chosen["tail_p10"]
+                chosen_med  = chosen["tail_p50"]
                 st.markdown(f"""
 <div class="metric-card" style="margin-top:8px">
   <div class="metric-val" style="font-size:16px">{chosen["label"]}</div>
-  <div class="metric-lbl" style="margin-top:6px">
+  <div class="metric-lbl" style="margin-top:8px">
     Return: {chosen["port_r"]*100:.2f}% &nbsp;|&nbsp;
     Vol: {chosen["port_v"]*100:.1f}% &nbsp;|&nbsp;
     Sharpe: {chosen["sharpe"]:.2f}
   </div>
-  <div class="metric-tooltip" style="display:block;font-size:11px;margin-top:6px">
-    To use this allocation instead of the optimal, copy the weights above.
-    ETF mapping will be added in a future version.
+  <div class="metric-tooltip" style="display:block;font-size:12px;margin-top:8px;color:#9ca3af">
+    Median outcome: EUR {chosen_med:,.0f} &nbsp;|&nbsp;
+    Worst 10% outcome: EUR {chosen_tail:,.0f}<br>
+    The gap between these two numbers is your real downside risk.
+    ETF mapping coming in next version.
   </div>
 </div>""", unsafe_allow_html=True)
 
