@@ -2283,28 +2283,63 @@ Comparing against: <b>{active_label}</b> portfolio.
                     f"[view on justETF]({result['url']}) to look up the details."
                 )
 
-            # Manual entry form (pre-filled where possible)
+            # Add form — plain widgets (no st.form) so button works without form submission quirks
             st.markdown("**Add to holdings:**")
-            with st.form("etf_add_form"):
-                fc1, fc2, fc3, fc4 = st.columns([3, 2, 2, 2])
-                with fc1:
-                    f_name  = st.text_input("Name / Ticker", value=result.get("name") or query)
-                with fc2:
-                    f_isin  = st.text_input("ISIN", value=result.get("isin", ""))
-                with fc3:
-                    ac_opts = list(ASSETS.keys())
-                    default_ac = result.get("asset_class")
-                    default_idx = ac_opts.index(default_ac) if default_ac in ac_opts else 0
-                    f_ac = st.selectbox("Maps to asset class", ac_opts, index=default_idx)
-                with fc4:
-                    f_val = st.number_input("Current value (EUR)", min_value=0.0, value=0.0, step=100.0)
-                submitted = st.form_submit_button("Add to holdings")
-                if submitted and f_name:
+            # Persist lookup result in session state so values survive widget interactions
+            if "etf_stage" not in st.session_state or st.session_state.get("etf_stage_query") != query:
+                st.session_state["etf_stage"] = {
+                    "name": result.get("name") or query,
+                    "isin": result.get("isin", ""),
+                    "asset_class": result.get("asset_class") or "",
+                }
+                st.session_state["etf_stage_query"] = query
+
+            ac_opts = list(ASSETS.keys())
+            default_ac  = st.session_state["etf_stage"]["asset_class"]
+            default_idx = ac_opts.index(default_ac) if default_ac in ac_opts else 0
+
+            fc1, fc2, fc3, fc4 = st.columns([3, 2, 2, 2])
+            with fc1:
+                f_name = st.text_input("Name / Ticker",
+                    value=st.session_state["etf_stage"]["name"], key="etf_f_name")
+            with fc2:
+                f_isin = st.text_input("ISIN",
+                    value=st.session_state["etf_stage"]["isin"], key="etf_f_isin")
+            with fc3:
+                f_ac = st.selectbox("Maps to asset class", ac_opts,
+                    index=default_idx, key="etf_f_ac")
+            with fc4:
+                f_val = st.number_input("Current value (EUR)",
+                    min_value=0.0, value=0.0, step=100.0, key="etf_f_val")
+
+            if st.button("✅ Add to holdings", key="etf_add_btn"):
+                if f_name:
                     st.session_state["etf_holdings"].append({
                         "Name": f_name, "ISIN": f_isin,
                         "Asset Class": f_ac, "Value (EUR)": f_val
                     })
-                    st.success(f"Added {f_name}")
+                    st.session_state.pop("etf_stage", None)
+                    st.session_state.pop("etf_stage_query", None)
+                    st.success(f"✅ Added **{f_name}** — see holdings below.")
+
+        # Quick-add without searching — for when you know your ETF
+        with st.expander("➕ Add ETF manually (without searching)", expanded=False):
+            qa1, qa2, qa3, qa4 = st.columns([3, 2, 2, 2])
+            with qa1:
+                qa_name = st.text_input("Name / Ticker", key="qa_name", placeholder="e.g. VWCE")
+            with qa2:
+                qa_isin = st.text_input("ISIN", key="qa_isin", placeholder="e.g. IE00BK5BQT80")
+            with qa3:
+                qa_ac = st.selectbox("Asset class", list(ASSETS.keys()), key="qa_ac")
+            with qa4:
+                qa_val = st.number_input("Value (EUR)", min_value=0.0, value=0.0,
+                                          step=100.0, key="qa_val")
+            if st.button("Add", key="qa_add_btn") and qa_name:
+                st.session_state["etf_holdings"].append({
+                    "Name": qa_name, "ISIN": qa_isin,
+                    "Asset Class": qa_ac, "Value (EUR)": qa_val
+                })
+                st.success(f"Added {qa_name}")
 
         # ── Holdings — always visible below search ───────────────
         st.divider()
