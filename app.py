@@ -592,7 +592,9 @@ def _dynamic_label(w_c, names, cat_map):
     cash= cat_w("Cash")
 
     # Dominant philosophy based on actual weights
-    if alt >= 0.20:
+    if alt >= 0.19 and eq >= 0.55:
+        return "Ultra Spicy (Max Ambition)"
+    elif alt >= 0.18:
         return "Moonshot (High Alt)"
     elif alt >= 0.12 and eq >= 0.45:
         return "Growth + Alt Satellite"
@@ -616,7 +618,7 @@ def _dynamic_label(w_c, names, cat_map):
         return "Diversified"
 
 
-def find_alternative_portfolios(names, target_r, n_alternatives=5, sharpe_tol=0.18):
+def find_alternative_portfolios(names, target_r, n_alternatives=6, sharpe_tol=0.25):
     # Higher sharpe_tol: satellite/moonshot portfolios intentionally sacrifice
     # some Sharpe efficiency for asymmetric return potential. We want to show
     # these even if they're 0.15 Sharpe below optimal.
@@ -719,10 +721,11 @@ def find_alternative_portfolios(names, target_r, n_alternatives=5, sharpe_tol=0.
             "seed": np.ones(n) / n,
         },
         {
-            # Real asset tilt — hard floor on real assets
-            "name": "real_assets",
+            # Real asset tilt — hard floor on real assets (Sharpe-optimised)
+            # Distinct from inflation_hedge which has a higher real floor (0.25)
+            "name": "real_assets_sharpe",
             "objective": lambda w: -((w @ rets - rf) / (np.sqrt(w.T @ cov @ w + 1e-10))) + 0.10 * np.sum(w**2),
-            "floors": {"Real": min(0.20, ASSUMPTIONS["category_caps"].get("Real", 0.40))},
+            "floors": {"Real": min(0.18, ASSUMPTIONS["category_caps"].get("Real", 0.40))},
             "seed": (lambda s: (s.__setitem__(slice(None), 0.02), [s.__setitem__(i, 0.15) for i in re_idx], s.__itruediv__(s.sum()), s)[-1])(np.ones(n) * 0.02) if re_idx else np.ones(n)/n,
         },
         {
@@ -781,6 +784,26 @@ def find_alternative_portfolios(names, target_r, n_alternatives=5, sharpe_tol=0.
                 [s.__setitem__(i, 0.13) for i in cat_map.get("Real", [])],
                 s.__itruediv__(s.sum()), s)[-1]
             )(np.ones(n) * 0.02),
+        },
+        {
+            # Ultra Spicy: maximum ambition portfolio
+            # Objective: pure return maximisation with NO risk penalty
+            # Hard floors: Alt at cap (20%), Equity at cap (70% if available)
+            # Crypto + high-vol assets will dominate the Alt sleeve
+            # This is the "shoot for the moon" option — highest expected return,
+            # highest vol, worst tail. Shows what maximum ambition actually costs.
+            "name": "ultra_spicy",
+            "objective": lambda w: -(w @ raw_rets),  # raw returns — no shrinkage, no risk penalty
+            "floors": {
+                "Alt":    ASSUMPTIONS["category_caps"].get("Alt", 0.20),   # max out alts
+                "Equity": min(0.60, ASSUMPTIONS["category_caps"].get("Equity", 0.70)),
+            },
+            "seed": (lambda s: (
+                s.__setitem__(slice(None), 0.005),
+                [s.__setitem__(i, 0.20) for i in cat_map.get("Alt", [])],
+                [s.__setitem__(i, 0.15) for i in cat_map.get("Equity", [])],
+                s.__itruediv__(s.sum()), s)[-1]
+            )(np.ones(n) * 0.005),
         },
     ]
 
