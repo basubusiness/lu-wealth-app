@@ -1047,16 +1047,69 @@ if "results" in st.session_state:
     p10_b, p50_b, p90_b = [maybe_deflate(np.percentile(paths_b, p, axis=0)) for p in [10, 50, 90]]
     p10_c, p50_c, p90_c = [maybe_deflate(np.percentile(paths_c, p, axis=0)) for p in [10, 50, 90]]
 
-    # Core metrics
+    # ── Resolve active portfolio selection ───────────────────────────────────
+    # Build all_opts early so the radio widget can be shown above the plan table
+    alts_early = R.get("alternatives", [])
+    all_opts_early = [{"label": "★ Optimal", "weights": w,
+                        "port_r": port_r, "port_v": port_v,
+                        "sharpe": (port_r - 0.02) / port_v if port_v > 0 else 0}] + alts_early
+
+    # Portfolio selector — lives above everything, drives all downstream metrics
+    sel_labels = [o["label"] for o in all_opts_early]
+    active_key = st.session_state.get("active_portfolio_label", "★ Optimal")
+    if active_key not in sel_labels:
+        active_key = sel_labels[0]
+
+    st.markdown("### Active Portfolio")
+    chosen_label_top = st.radio(
+        "Select portfolio to view across all tabs:",
+        sel_labels,
+        index=sel_labels.index(active_key),
+        horizontal=True,
+        key="active_portfolio_radio",
+        help="Switching here updates the plan table, metrics, projection and risk tabs to reflect the selected portfolio."
+    )
+    st.session_state["active_portfolio_label"] = chosen_label_top
+    active = next(o for o in all_opts_early if o["label"] == chosen_label_top)
+
+    # Override active portfolio variables — everything downstream uses these
+    w_active      = active["weights"]
+    port_r_active = active["port_r"]
+    port_v_active = active["port_v"]
+    sharpe_active = active["sharpe"]
+
+    if chosen_label_top != "★ Optimal":
+        st.info(
+            f"Viewing **{chosen_label_top}** — all metrics, projections and risk figures "
+            f"below reflect this portfolio. Return to **★ Optimal** to see the base plan."
+        )
+
+    # Recompute paths for active portfolio using shared shocks
+    shared_shocks = R.get("shared_shocks", None)
+    scenario_scale = ASSUMPTIONS["return_scenarios"][scenario]
+    sim_mu_active  = port_r_active * scenario_scale
+    paths_b_active = simulate_paths(sim_mu_active, port_v_active, years, initial, monthly, growth,
+                                    crisis=False, precomputed_shocks=shared_shocks)
+    paths_c_active = simulate_paths(sim_mu_active, port_v_active, years, initial, monthly, growth,
+                                    crisis=True,  precomputed_shocks=R.get("shared_shocks", None))
+
+    # Recompute percentiles for active portfolio
+    p10_b, p50_b, p90_b = [maybe_deflate(np.percentile(paths_b_active, p, axis=0)) for p in [10, 50, 90]]
+    p10_c, p50_c, p90_c = [maybe_deflate(np.percentile(paths_c_active, p, axis=0)) for p in [10, 50, 90]]
+
+    # Core metrics — all derived from active portfolio
     total_invested = initial + sum(monthly * 12 * ((1 + growth) ** i) for i in range(years))
     real_invested  = total_invested / ((1 + inflation) ** years) if show_real else total_invested
     med_final      = p50_b[-1]
-    growth_val     = med_final - (real_invested if show_real else total_invested)
     swr            = ASSUMPTIONS["safe_withdrawal_rate"]
     monthly_income = med_final * swr / 12
     tipping        = next((i for i in range(1, years + 1)
                            if p50_b[i] * swr / 12 >= monthly), None)
-    sharpe         = (port_r - 0.02) / port_v if port_v > 0 else 0
+    # Use active portfolio values throughout
+    port_r  = port_r_active
+    port_v  = port_v_active
+    sharpe  = sharpe_active
+    w       = w_active
 
     # --- Tabs ---
     with st.expander("📖 Glossary — key terms used in this tool", expanded=False):
@@ -1165,23 +1218,14 @@ if "results" in st.session_state:
         alts = R.get("alternatives", [])
         if alts:
             st.divider()
-            st.subheader("Alternative Portfolio Structures")
+            st.subheader("Compare All Portfolio Structures")
             st.caption(
-                "Similar efficiency, different trade-offs — each portfolio enforces a distinct "
-                "structural philosophy via hard constraints. Labels reflect actual allocation, "
-                "not intent. Worst single year = empirical 1-in-20 year loss from simulation."
+                "The selector above drives all tabs. This table shows all alternatives "
+                "side-by-side so you can compare before choosing. "
+                "Worst single year = empirical 1-in-20 year loss from simulation."
             )
-
-            # Build comparison table
-            all_opts = [{"label": "★ Optimal (selected)", "weights": w,
-                          "port_r": port_r, "port_v": port_v,
-                          "sharpe": (port_r - 0.02) / port_v}] + alts
-
-            # Radio selector
-            alt_labels = [o["label"] for o in all_opts]
-            chosen_label = st.radio("View allocation:", alt_labels, horizontal=True,
-                                     key="alt_selector")
-            chosen = next(o for o in all_opts if o["label"] == chosen_label)
+            all_opts = all_opts_early  # already built above
+            chosen   = active          # driven by top radio
 
             col_cmp1, col_cmp2 = st.columns([3, 2])
             with col_cmp1:
@@ -1252,22 +1296,17 @@ if "results" in st.session_state:
             summary_df = pd.DataFrame(summary_rows).set_index("Portfolio")
             st.dataframe(summary_df, use_container_width=True)
 
-            # Stats for chosen
-            if "tail_p10" in chosen:
-                chosen_tail = chosen["tail_p10"]
-                chosen_med  = chosen["tail_p50"]
-                st.markdown(f"""
-<div class="metric-card" style="margin-top:8px">
-  <div class="metric-val" style="font-size:16px">{chosen["label"]}</div>
+            # Active portfolio quick stats
+            st.markdown(f"""
+<div class="metric-card" style="margin-top:8px;border-color:#3b82f6">
+  <div class="metric-val" style="font-size:15px">Active: {chosen["label"]}</div>
   <div class="metric-lbl" style="margin-top:8px">
     Return: {chosen["port_r"]*100:.2f}% &nbsp;|&nbsp;
     Vol: {chosen["port_v"]*100:.1f}% &nbsp;|&nbsp;
     Sharpe: {chosen["sharpe"]:.2f}
   </div>
   <div class="metric-tooltip" style="display:block;font-size:12px;margin-top:8px;color:#9ca3af">
-    Median outcome: EUR {chosen_med:,.0f} &nbsp;|&nbsp;
-    Worst 10% outcome: EUR {chosen_tail:,.0f}<br>
-    The gap between these two numbers is your real downside risk.
+    Select a portfolio in the radio above to update all tabs.
     ETF mapping coming in next version.
   </div>
 </div>""", unsafe_allow_html=True)
