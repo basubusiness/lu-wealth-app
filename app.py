@@ -1948,76 +1948,177 @@ from its target weight. This is a rules-based trigger — not a market call.
                     search_url = f"https://www.justetf.com/en/search.html?search=ETF&query={enc}"
                     result["url"] = search_url
 
-                try:
-                    req = urllib.request.Request(
-                        search_url,
-                        headers={"User-Agent": "Mozilla/5.0"}
-                    )
-                    with urllib.request.urlopen(req, timeout=6) as resp:
-                        html = resp.read().decode("utf-8", errors="ignore")
+                # ── Known ISIN lookup table (common UCITS ETFs) ──────────
+                    # Reliable fallback — no parsing needed for these
+                    KNOWN_ISINS = {
+                        # World / All-world
+                        "IE00B4L5Y983": ("iShares Core MSCI World UCITS ETF (IWDA)", 0.20, "World Equity"),
+                        "IE00B3RBWM25": ("Vanguard FTSE All-World UCITS ETF (VWRL)", 0.22, "World Equity"),
+                        "IE00BK5BQT80": ("Vanguard FTSE All-World UCITS ETF Acc (VWCE)", 0.22, "World Equity"),
+                        "LU0274208692": ("Xtrackers MSCI World Swap UCITS ETF", 0.19, "World Equity"),
+                        "IE00B4L5YX21": ("iShares MSCI World SRI UCITS ETF", 0.20, "World Equity"),
+                        # US Equity
+                        "IE00B5BMR087": ("iShares Core S&P 500 UCITS ETF (CSPX)", 0.07, "US Equity"),
+                        "IE00BYML9W36": ("iShares Core S&P 500 UCITS ETF EUR Hedged", 0.10, "US Equity"),
+                        "LU0490618542": ("Xtrackers S&P 500 Swap UCITS ETF", 0.15, "US Equity"),
+                        "IE00B3XXRP09": ("Vanguard S&P 500 UCITS ETF (VUSA)", 0.07, "US Equity"),
+                        "IE00BFMXXD54": ("iShares S&P 500 EUR Hedged UCITS ETF", 0.10, "US Equity"),
+                        # Europe
+                        "IE00B4K48X80": ("iShares Core MSCI Europe UCITS ETF", 0.12, "Europe Equity"),
+                        "IE00B3ZW0K18": ("iShares STOXX Europe 600 UCITS ETF", 0.20, "Europe Equity"),
+                        "LU0274209237": ("Xtrackers Euro Stoxx 50 UCITS ETF", 0.09, "Europe Equity"),
+                        # Emerging Markets
+                        "IE00B4L5YC18": ("iShares Core MSCI EM IMI UCITS ETF (EIMI)", 0.18, "Emerging Markets"),
+                        "IE00BKM4GZ66": ("iShares Core MSCI Emerging Markets UCITS ETF", 0.18, "Emerging Markets"),
+                        "LU0292107645": ("Xtrackers MSCI Emerging Markets Swap UCITS ETF", 0.20, "Emerging Markets"),
+                        # Small Cap
+                        "IE00BF4RFH31": ("iShares MSCI World Small Cap UCITS ETF", 0.35, "Global Small Cap"),
+                        "IE00B3VVMM84": ("Vanguard FTSE All-World Small-Cap UCITS ETF", 0.38, "Global Small Cap"),
+                        # Bonds
+                        "IE00B3F81R35": ("iShares Core Global Aggregate Bond UCITS ETF (AGGG)", 0.10, "Corp Bonds"),
+                        "IE00BDBRDM35": ("iShares Core Global Aggregate Bond EUR Hedged (AGGH)", 0.10, "Corp Bonds"),
+                        "IE00B4WXJJ64": ("iShares Euro Government Bond UCITS ETF", 0.15, "Euro Gov Bonds"),
+                        "LU0290358497": ("Xtrackers Eurozone Government Bond UCITS ETF", 0.15, "Euro Gov Bonds"),
+                        "IE00B3DKXQ41": ("iShares EUR Corporate Bond UCITS ETF", 0.20, "Corp Bonds"),
+                        "IE00B0M62X26": ("iShares Global Inflation Linked Govt Bond UCITS ETF", 0.25, "Global Inflation Bonds"),
+                        # Real Assets
+                        "IE00B8GF1M35": ("iShares Developed Markets Property Yield UCITS ETF", 0.59, "Global REIT"),
+                        "IE00B3CNHF87": ("iShares Physical Gold ETC (IGLN)", 0.12, "Gold"),
+                        "IE00B4ND3602": ("iShares Gold Producers UCITS ETF", 0.55, "Gold"),
+                        "IE00BYXYX521": ("iShares Diversified Commodity Swap UCITS ETF", 0.19, "Broad Commodities"),
+                        # Sector / Alt
+                        "IE00BGV5VN51": ("iShares MSCI Global Semiconductors UCITS ETF", 0.35, "Semiconductors"),
+                        "LU1834983477": ("Amundi MSCI Semiconductors ESG Screened UCITS ETF", 0.35, "Semiconductors"),
+                        "IE0005E9BX43": ("Global X Uranium UCITS ETF", 0.65, "Uranium / Nuclear"),
+                        "IE000CNSFAR2": ("VanEck Uranium and Nuclear Technologies UCITS ETF", 0.55, "Uranium / Nuclear"),
+                    }
 
-                    # Extract name
-                    m = _re.search(r'<h1[^>]*class="[^"]*h2[^"]*"[^>]*>([^<]+)</h1>', html)
-                    if not m:
-                        m = _re.search(r'<title>([^|<]+)', html)
-                    if m:
-                        result["name"] = m.group(1).strip()
-                        result["success"] = True
+                    # Check known ISIN first — most reliable
+                    isin_upper = query.upper().replace(" ", "")
+                    if isin_upper in KNOWN_ISINS:
+                        name, ter, ac = KNOWN_ISINS[isin_upper]
+                        result.update({
+                            "success": True, "name": name,
+                            "ter": ter, "asset_class": ac,
+                            "isin": isin_upper, "source": "known_db"
+                        })
+                    else:
+                        # Fall back to justETF scrape
+                        try:
+                            req = urllib.request.Request(
+                                search_url,
+                                headers={
+                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                                    "Accept-Language": "en-GB,en;q=0.9",
+                                    "Accept": "text/html,application/xhtml+xml",
+                                }
+                            )
+                            with urllib.request.urlopen(req, timeout=8) as resp:
+                                html = resp.read().decode("utf-8", errors="ignore")
 
-                    # Extract TER
-                    m_ter = _re.search(r'([0-9]+\.[0-9]+)\s*%.*?(?:TER|total expense)', html, _re.IGNORECASE)
-                    if m_ter:
-                        result["ter"] = float(m_ter.group(1))
+                            # Name: title tag is most reliable
+                            m = _re.search(r'<title>([^|<]{5,80})', html)
+                            if m:
+                                result["name"] = m.group(1).strip().rstrip(" -")
+                                result["success"] = True
 
-                    # Guess asset class from name/content
-                    html_lower = html.lower()
-                    if any(x in html_lower for x in ["government bond", "treasury", "gilt", "bund"]):
-                        result["asset_class"] = "Euro Gov Bonds"
-                    elif any(x in html_lower for x in ["corporate bond", "credit"]):
-                        result["asset_class"] = "Corp Bonds"
-                    elif any(x in html_lower for x in ["inflation", "tips", "linker"]):
-                        result["asset_class"] = "Global Inflation Bonds"
-                    elif any(x in html_lower for x in ["emerging market", "msci em"]):
-                        result["asset_class"] = "Emerging Markets"
-                    elif any(x in html_lower for x in ["world", "global", "all country", "acwi", "ftse all"]):
-                        result["asset_class"] = "World Equity"
-                    elif any(x in html_lower for x in ["s&p 500", "nasdaq", "russell", "united states", "us equity"]):
-                        result["asset_class"] = "US Equity"
-                    elif any(x in html_lower for x in ["europe", "stoxx", "eurostoxx"]):
-                        result["asset_class"] = "Europe Equity"
-                    elif any(x in html_lower for x in ["japan", "pacific", "asia pacific"]):
-                        result["asset_class"] = "Japan / Pacific"
-                    elif any(x in html_lower for x in ["reit", "real estate", "property"]):
-                        result["asset_class"] = "Global REIT"
-                    elif any(x in html_lower for x in ["gold", "precious metal"]):
-                        result["asset_class"] = "Gold"
-                    elif any(x in html_lower for x in ["commodity", "commodities"]):
-                        result["asset_class"] = "Broad Commodities"
-                    elif any(x in html_lower for x in ["semiconductor", "technology", "tech"]):
-                        result["asset_class"] = "Semiconductors"
-                    elif any(x in html_lower for x in ["uranium", "nuclear"]):
-                        result["asset_class"] = "Uranium / Nuclear"
-                    elif any(x in html_lower for x in ["small cap", "small-cap"]):
-                        result["asset_class"] = "Global Small Cap"
+                            # TER: look for the specific justETF pattern
+                            # justETF renders: <span class="vallabel">TER</span>...<span>X.XX%</span>
+                            ter_block = _re.search(
+                                r'TER[^<]{0,200}?([0-9]{1,2}\.[0-9]{2})\s*%',
+                                html, _re.IGNORECASE | _re.DOTALL
+                            )
+                            if ter_block:
+                                ter_val = float(ter_block.group(1))
+                                if ter_val < 5.0:  # sanity check — TER > 5% is nonsense
+                                    result["ter"] = ter_val
 
-                except Exception as e:
-                    result["error"] = str(e)
+                            # Asset class: match ETF NAME first (most reliable signal),
+                            # then fall back to page body keywords
+                            name_lower = (result.get("name") or "").lower()
+                            # Priority: match on name first
+                            if any(x in name_lower for x in ["s&p 500", "sp500", "russell", "nasdaq", "us equit"]):
+                                result["asset_class"] = "US Equity"
+                            elif any(x in name_lower for x in ["msci world", "ftse all-world", "ftse all world", "acwi", "global equit"]):
+                                result["asset_class"] = "World Equity"
+                            elif any(x in name_lower for x in ["emerging market", "msci em", "ftse em"]):
+                                result["asset_class"] = "Emerging Markets"
+                            elif any(x in name_lower for x in ["europe", "stoxx", "eurostoxx", "euro stoxx"]):
+                                result["asset_class"] = "Europe Equity"
+                            elif any(x in name_lower for x in ["japan", "topix", "nikkei", "pacific"]):
+                                result["asset_class"] = "Japan / Pacific"
+                            elif any(x in name_lower for x in ["small cap", "small-cap", "smallcap"]):
+                                result["asset_class"] = "Global Small Cap"
+                            elif any(x in name_lower for x in ["reit", "real estate", "property"]):
+                                result["asset_class"] = "Global REIT"
+                            elif any(x in name_lower for x in ["gold", "precious metal"]):
+                                result["asset_class"] = "Gold"
+                            elif any(x in name_lower for x in ["commodity", "commodities"]):
+                                result["asset_class"] = "Broad Commodities"
+                            elif any(x in name_lower for x in ["inflation", "tips", "linker", "inflation-link"]):
+                                result["asset_class"] = "Global Inflation Bonds"
+                            elif any(x in name_lower for x in ["government bond", "govt bond", "treasury", "bund", "sovereign"]):
+                                result["asset_class"] = "Euro Gov Bonds"
+                            elif any(x in name_lower for x in ["corporate bond", "corp bond", "aggregate bond", "credit"]):
+                                result["asset_class"] = "Corp Bonds"
+                            elif any(x in name_lower for x in ["semiconductor", "chip"]):
+                                result["asset_class"] = "Semiconductors"
+                            elif any(x in name_lower for x in ["uranium", "nuclear"]):
+                                result["asset_class"] = "Uranium / Nuclear"
+
+                            # Attempt to extract top 5 holdings from the page
+                            # justETF renders holdings in a table with class "holdings-table" or similar
+                            holdings_block = _re.search(
+                                r'(?:Top Holdings|top 10|largest holdings)[^<]{0,500}?' +
+                                r'(<table[^>]*>.*?</table>)',
+                                html, _re.IGNORECASE | _re.DOTALL
+                            )
+                            if holdings_block:
+                                rows = _re.findall(r'<tr[^>]*>(.*?)</tr>', holdings_block.group(1), _re.DOTALL)
+                                holdings_list = []
+                                for row in rows[1:6]:  # skip header, take up to 5
+                                    cells = _re.findall(r'<td[^>]*>([^<]{2,50})</td>', row)
+                                    if len(cells) >= 2:
+                                        name_c = cells[0].strip()
+                                        pct_m  = _re.search(r'([0-9]+\.?[0-9]*)\s*%', cells[-1])
+                                        if name_c and pct_m:
+                                            holdings_list.append((name_c, float(pct_m.group(1))))
+                                if holdings_list:
+                                    result["top_holdings"] = holdings_list
+
+                        except Exception as e:
+                            result["error"] = str(e)
 
             # Show result
             if result["success"]:
-                st.success(f"Found: **{result['name']}**")
+                src_tag = " *(from database)*" if result.get("source") == "known_db" else " *(from justETF)*"
+                st.success(f"Found: **{result['name']}**{src_tag}")
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     st.metric("ISIN", result["isin"])
                 with c2:
                     st.metric("TER", f"{result['ter']}%" if result["ter"] else "—")
                 with c3:
-                    st.metric("Suggested mapping", result["asset_class"] or "Unknown")
+                    st.metric("Suggested mapping", result["asset_class"] or "Unknown — select below")
+
+                # Show top holdings if extracted
+                if result.get("top_holdings"):
+                    st.markdown("**Top holdings from justETF:**")
+                    h_df = pd.DataFrame(result["top_holdings"], columns=["Holding", "Weight %"])
+                    st.dataframe(
+                        h_df.style.format({"Weight %": "{:.2f}%"})
+                        .bar(subset=["Weight %"], color="#1e3a5f"),
+                        use_container_width=True, hide_index=True
+                    )
+                    st.caption(
+                        "Top holdings shown for reference only — composition changes over time. "
+                        "Check the ETF factsheet for the latest data."
+                    )
             else:
                 st.warning(
                     f"Could not auto-fetch data for **{query}**. "
                     f"Fill in manually below, or "
-                    f"[view on justETF]({result['url']}) to get the details."
+                    f"[view on justETF]({result['url']}) to look up the details."
                 )
 
             # Manual entry form (pre-filled where possible)
