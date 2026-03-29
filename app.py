@@ -2306,69 +2306,72 @@ Comparing against: <b>{active_label}</b> portfolio.
                     })
                     st.success(f"Added {f_name}")
 
-        # Show current holdings
+        # ── Holdings — always visible below search ───────────────
+        st.divider()
+        st.markdown("### Your Holdings")
         if st.session_state["etf_holdings"]:
-            st.divider()
-            st.markdown("**Your Holdings**")
             holdings_df = pd.DataFrame(st.session_state["etf_holdings"])
             total_h = holdings_df["Value (EUR)"].sum()
-
-            # Allow deletion
-            del_idx = st.multiselect(
-                "Select rows to remove",
-                options=list(range(len(holdings_df))),
-                format_func=lambda i: st.session_state["etf_holdings"][i]["Name"],
-                key="etf_del"
+            st.caption(
+                f"**{len(st.session_state['etf_holdings'])} ETFs added** · "
+                f"Total: **EUR {total_h:,.0f}** · "
+                f"Go to the **Rebalance** tab to compare against your model target."
             )
-            if st.button("Remove selected", key="etf_del_btn") and del_idx:
-                st.session_state["etf_holdings"] = [
-                    h for i, h in enumerate(st.session_state["etf_holdings"])
-                    if i not in del_idx
-                ]
-                st.rerun()
-
-            st.dataframe(
-                holdings_df.style.format({"Value (EUR)": "EUR {:,.0f}"}),
-                use_container_width=True, hide_index=True
+            # Editable table — change asset class mapping or values inline
+            edited_holdings = st.data_editor(
+                holdings_df,
+                column_config={
+                    "Name":        st.column_config.TextColumn("ETF Name"),
+                    "ISIN":        st.column_config.TextColumn("ISIN"),
+                    "Asset Class": st.column_config.SelectboxColumn(
+                        "Asset Class", options=list(ASSETS.keys())
+                    ),
+                    "Value (EUR)": st.column_config.NumberColumn(
+                        "Value (EUR)", min_value=0, format="EUR %.0f"
+                    ),
+                },
+                use_container_width=True, hide_index=True,
+                key="holdings_editor", num_rows="dynamic",
             )
-            st.caption(f"Total portfolio value: **EUR {total_h:,.0f}**")
+            if edited_holdings is not None:
+                st.session_state["etf_holdings"] = edited_holdings.to_dict("records")
 
-            # Aggregate by asset class vs model target
-            agg = holdings_df.groupby("Asset Class")["Value (EUR)"].sum()
-            agg_pct = agg / total_h
-
-            # Compare to active portfolio target
-            target_w = dict(zip(assets, w))
-            st.markdown("**Holdings vs Model Target**")
-            rows = []
-            all_classes = sorted(set(list(agg_pct.index) + list(target_w.keys())))
+            # Quick drift summary vs active portfolio
+            agg     = holdings_df.groupby("Asset Class")["Value (EUR)"].sum()
+            agg_pct = agg / total_h if total_h > 0 else agg
+            target_w_map = dict(zip(assets, w))
+            all_classes  = sorted(set(list(agg_pct.index) + [
+                a for a, wi in target_w_map.items() if wi > 0.005
+            ]))
+            drift_rows = []
             for ac in all_classes:
-                actual = float(agg_pct.get(ac, 0.0))
-                target_wt = float(target_w.get(ac, 0.0)) if target_w.get(ac, 0.0) > 0.005 else 0.0
-                drift = actual - target_wt
-                rows.append({
-                    "Asset Class": ac,
-                    "You hold": actual,
+                actual    = float(agg_pct.get(ac, 0.0))
+                target_wt = float(target_w_map.get(ac, 0.0)) if target_w_map.get(ac, 0.0) > 0.005 else 0.0
+                drift_rows.append({
+                    "Asset Class":  ac,
+                    "You hold":     actual,
                     "Model target": target_wt,
-                    "Drift": drift,
+                    "Drift":        actual - target_wt,
                 })
-            drift_df = pd.DataFrame(rows)
+            drift_df = pd.DataFrame(drift_rows)
             drift_df = drift_df[drift_df[["You hold","Model target"]].max(axis=1) > 0.001]
+            st.markdown("**Quick drift vs model target:**")
             st.dataframe(
-                drift_df.style.format({
-                    "You hold": "{:.1%}",
-                    "Model target": "{:.1%}",
-                    "Drift": "{:+.1%}",
-                }).bar(subset=["Drift"], align="zero", color=["#7f1d1d","#14532d"]),
+                drift_df.style
+                    .format({"You hold": "{:.1%}", "Model target": "{:.1%}", "Drift": "{:+.1%}"})
+                    .bar(subset=["Drift"], align="zero", color=["#7f1d1d","#14532d"]),
                 use_container_width=True, hide_index=True
             )
             st.caption(
-                "Drift = your actual exposure minus model target. "
-                "Green = underweight (buy more). Red = overweight (trim). "
-                "Full rebalance signals coming in next version."
+                "Drift = actual minus target. Green = underweight. Red = overweight. "
+                "Go to **Rebalance** tab for full buy/sell signals."
             )
         else:
-            st.info("No holdings added yet. Search for an ETF above to get started.")
+            st.info(
+                "No holdings yet — search for an ETF above and click **Add to holdings**. "
+                "Your list will appear here and automatically populate the Rebalance tab."
+            )
+
 
     with tab_engine:
         st.header("Engine Room — Advanced Overrides")
