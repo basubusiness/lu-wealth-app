@@ -630,8 +630,8 @@ cross-asset correlations floored at {ASSUMPTIONS['crisis_regime']['corr_floor']}
 
         # Total invested annotation
         tot_inv_real = maybe_deflate(np.array([total_invested]))[0]
-        st.caption(f"Total capital injected over {years} years: **€{total_invested:,.0f}** "
-                   f"({'€'+f'{tot_inv_real:,.0f} in today\\'s €' if show_real else 'nominal'})")
+        real_note = f"EUR {tot_inv_real:,.0f} in today's money" if show_real else "nominal"
+        st.caption(f"Total capital injected over {years} years: **EUR {total_invested:,.0f}** ({real_note})")
 
     # ── TAB 3: RISK ───────────────────────────────────────────
     with tab_risk:
