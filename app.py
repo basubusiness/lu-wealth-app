@@ -172,22 +172,110 @@ ASSUMPTIONS = {
 # ============================================================
 # ASSETS
 # ============================================================
+# "overlap" = list of other assets this one partially contains (for UI warning)
+# "note"    = short plain-English description shown in the asset selector
+# "max_w"   = optional per-asset hard cap (overrides global max_asset_weight)
 ASSETS = {
-    "World Equity":          {"return": 0.075, "vol": 0.16, "cat": "Equity"},
-    "US Equity":             {"return": 0.078, "vol": 0.17, "cat": "Equity"},
-    "Emerging Markets":      {"return": 0.080, "vol": 0.22, "cat": "Equity"},
-    "Global Small Cap":      {"return": 0.082, "vol": 0.19, "cat": "Equity"},
-    "Global REIT":           {"return": 0.060, "vol": 0.19, "cat": "Real"},
-    "Gold":                  {"return": 0.050, "vol": 0.17, "cat": "Real"},
-    "Broad Commodities":     {"return": 0.040, "vol": 0.20, "cat": "Real"},
-    "Euro Gov Bonds":        {"return": 0.030, "vol": 0.06, "cat": "Bond"},
-    "Corp Bonds":            {"return": 0.035, "vol": 0.07, "cat": "Bond"},
-    "Global Inflation Bonds":{"return": 0.032, "vol": 0.05, "cat": "Bond"},
-    "Cash":                  {"return": 0.025, "vol": 0.01, "cat": "Cash"},
-    "Crypto":                {"return": 0.100, "vol": 0.75, "cat": "Alt"},
-    "Semiconductors":        {"return": 0.090, "vol": 0.30, "cat": "Alt"},
-    "Frontier Markets":      {"return": 0.085, "vol": 0.28, "cat": "Alt"},
-    "Uranium":               {"return": 0.090, "vol": 0.35, "cat": "Alt"},
+    # ── Broad / All-World ──────────────────────────────────────────────────
+    # Contains ~65% US by market cap. Fine as a single holding (e.g. VWCE).
+    # Overlap with US Equity if both selected — effective US exposure doubles.
+    "World Equity":          {
+        "return": 0.075, "vol": 0.16, "cat": "Equity",
+        "note": "All-world market cap (MSCI World / FTSE All-World). ~65% US.",
+        "overlap": ["US Equity"],
+    },
+    # ── US ────────────────────────────────────────────────────────────────
+    "US Equity":             {
+        "return": 0.078, "vol": 0.17, "cat": "Equity",
+        "note": "S&P 500 or total US market. Overlaps with World Equity.",
+        "overlap": ["World Equity"],
+    },
+    # ── Non-US Developed ──────────────────────────────────────────────────
+    # Clean complement to US Equity — no overlap with World Equity if used
+    # in place of it, or a useful explicit ex-US tilt alongside World.
+    "Europe Equity":         {
+        "return": 0.070, "vol": 0.16, "cat": "Equity",
+        "note": "Developed Europe (STOXX 600 / MSCI Europe). No US overlap.",
+        "overlap": [],
+    },
+    "Japan / Pacific":       {
+        "return": 0.065, "vol": 0.17, "cat": "Equity",
+        "note": "Japan, Australia, Singapore. Low US correlation.",
+        "overlap": [],
+    },
+    # ── Emerging & Frontier ───────────────────────────────────────────────
+    "Emerging Markets":      {
+        "return": 0.080, "vol": 0.22, "cat": "Equity",
+        "note": "MSCI EM — China, India, Brazil, Taiwan, Korea, etc.",
+        "overlap": [],
+    },
+    "Frontier Markets":      {
+        "return": 0.085, "vol": 0.28, "cat": "Alt",
+        "note": "Pre-EM countries. Higher growth potential, lower liquidity.",
+        "overlap": [],
+    },
+    # ── Size factor ───────────────────────────────────────────────────────
+    "Global Small Cap":      {
+        "return": 0.082, "vol": 0.19, "cat": "Equity",
+        "note": "Size premium tilt. Overlaps with World/US if both held.",
+        "overlap": ["World Equity", "US Equity"],
+    },
+    # ── Real Assets ───────────────────────────────────────────────────────
+    "Global REIT":           {
+        "return": 0.060, "vol": 0.19, "cat": "Real",
+        "note": "Listed real estate. Rate-sensitive; correlates with equity in stress.",
+        "overlap": [],
+    },
+    "Gold":                  {
+        "return": 0.050, "vol": 0.17, "cat": "Real",
+        "note": "Crisis hedge, low long-run real return. Useful as ballast.",
+        "overlap": [],
+    },
+    "Broad Commodities":     {
+        "return": 0.040, "vol": 0.20, "cat": "Real",
+        "note": "Energy, metals, agri basket. Inflation hedge.",
+        "overlap": [],
+    },
+    # ── Bonds ─────────────────────────────────────────────────────────────
+    "Euro Gov Bonds":        {
+        "return": 0.030, "vol": 0.06, "cat": "Bond",
+        "note": "EUR sovereign debt. Capital preservation, low return.",
+        "overlap": [],
+    },
+    "Corp Bonds":            {
+        "return": 0.035, "vol": 0.07, "cat": "Bond",
+        "note": "Investment-grade corporate bonds. Slight credit premium.",
+        "overlap": [],
+    },
+    "Global Inflation Bonds":{
+        "return": 0.032, "vol": 0.05, "cat": "Bond",
+        "note": "TIPS / linkers. Real return protection.",
+        "overlap": [],
+    },
+    # ── Cash ──────────────────────────────────────────────────────────────
+    "Cash":                  {
+        "return": 0.025, "vol": 0.01, "cat": "Cash",
+        "note": "Money market / short-term deposits. Liquidity buffer.",
+        "overlap": [],
+    },
+    # ── Satellite / Speculative ───────────────────────────────────────────
+    "Semiconductors":        {
+        "return": 0.090, "vol": 0.30, "cat": "Alt",
+        "note": "AI & chip supply chain thematic. High vol, high US concentration.",
+        "overlap": ["World Equity", "US Equity"],
+    },
+    "Uranium / Nuclear":     {
+        "return": 0.090, "vol": 0.38, "cat": "Alt",
+        "note": "Nuclear energy renaissance theme. Illiquid, policy-sensitive. Hard-capped at 5%.",
+        "overlap": [],
+        "max_w": 0.05,   # per-asset hard cap — overrides global max
+    },
+    "Crypto":                {
+        "return": 0.100, "vol": 0.75, "cat": "Alt",
+        "note": "Bitcoin / broad crypto. Extreme vol. Treat as speculative satellite only.",
+        "overlap": [],
+        "max_w": 0.05,   # hard cap
+    },
 }
 
 CORR_RULES = {
@@ -288,8 +376,9 @@ def optimize_portfolio(names, target_r, scenario):
             })
 
     n = len(names)
-    max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
-    bounds = [(0.0, max_w)] * n
+    global_max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
+    # Respect per-asset hard caps (e.g. Uranium, Crypto)
+    bounds = [(0.0, ASSETS[a].get("max_w", global_max_w)) for a in names]
 
     best_res = None
     for seed in [np.ones(n)/n, np.random.dirichlet(np.ones(n))]:
@@ -313,7 +402,7 @@ def optimize_portfolio(names, target_r, scenario):
         res_diag = minimize(
             lambda w: -(w @ raw_rets_diag),
             np.ones(len(names))/len(names),
-            bounds=[(0, ASSUMPTIONS["optimizer"]["max_asset_weight"])]*len(names),
+            bounds=[(0, ASSETS[a].get("max_w", ASSUMPTIONS["optimizer"]["max_asset_weight"])) for a in names],
             constraints=[{"type":"eq","fun":lambda w: np.sum(w)-1}] + [
                 {"type":"ineq","fun":lambda w, ix=idx, cap=cap: cap-np.sum(w[ix])}
                 for cat, cap in ASSUMPTIONS["category_caps"].items()
@@ -322,6 +411,7 @@ def optimize_portfolio(names, target_r, scenario):
             method="SLSQP"
         )
         max_under_caps = float(-(res_diag.fun)) if res_diag.success else max_uncapped  # raw return ceiling
+        # Note: diagnostic also respects per-asset caps
         # Identify which cap is binding
         binding = []
         if res_diag.success:
@@ -423,8 +513,8 @@ def sensitivity_analysis(names, target_r, scenario, years, initial, monthly, con
                 })
 
         n = len(names)
-        max_w = ASSUMPTIONS["optimizer"]["max_asset_weight"]
-        res = minimize(objective, np.ones(n)/n, bounds=[(0, max_w)]*n,
+        sens_bounds = [(0, ASSETS[a].get("max_w", ASSUMPTIONS["optimizer"]["max_asset_weight"])) for a in names]
+        res = minimize(objective, np.ones(n)/n, bounds=sens_bounds,
                        constraints=constraints, method="SLSQP",
                        options={"maxiter": 500, "ftol": 1e-8})
         if res.success:
@@ -526,7 +616,12 @@ with st.expander("🧩 Asset Universe", expanded=False):
             st.checkbox(f"All {cat}", key=f"master_{cat}",
                         on_change=sync_cat, args=(cat, cat_assets))
             for a in cat_assets:
-                st.checkbox(a, key=f"asset_{a}")
+                overlaps = ASSETS[a].get("overlap", [])
+                active_overlaps = [o for o in overlaps if st.session_state.get(f"asset_{o}", False)]
+                label = a
+                st.checkbox(label, key=f"asset_{a}",
+                            help=ASSETS[a].get("note", "") +
+                            (f" ⚠️ Overlaps with: {', '.join(active_overlaps)}" if active_overlaps else ""))
 
 # Derive selected list AFTER widgets render
 selected_assets = [a for a in ASSETS if st.session_state.get(f"asset_{a}", False)]
@@ -546,6 +641,24 @@ if selected_assets:
         st.warning(f"⚡ {target_pct}% target requires significant Equity/Alt exposure — review category caps in Engine tab.")
 else:
     st.info("Select assets to proceed.")
+
+# Overlap detection banner
+if selected_assets:
+    overlap_pairs = []
+    for a in selected_assets:
+        for o in ASSETS[a].get("overlap", []):
+            if o in selected_assets:
+                pair = tuple(sorted([a, o]))
+                if pair not in overlap_pairs:
+                    overlap_pairs.append(pair)
+    if overlap_pairs:
+        pairs_str = ", ".join(f"**{p[0]}** + **{p[1]}**" for p in overlap_pairs)
+        st.warning(
+            f"⚠️ **Overlap detected:** {pairs_str}. "
+            f"These assets share underlying holdings (e.g. World Equity contains ~65% US stocks). "
+            f"Your effective exposure to the overlapping region is higher than the weights suggest. "
+            f"This is fine if intentional — just be aware."
+        )
 
 # Rebuild correlation matrix only when selection changes
 sel_key = tuple(sorted(selected_assets))
