@@ -604,16 +604,18 @@ def _dynamic_label(w_c, names, cat_map):
         return "Equity Dominant"
     elif eq >= 0.50 and bn <= 0.20:
         return "Growth Tilt"
-    elif re >= 0.28:
+    elif re >= 0.25 and bn <= 0.15:
         return "Inflation Hedge"
-    elif re >= 0.20 and eq >= 0.30:
+    elif re >= 0.18 and eq >= 0.30:
         return "Real Asset Tilt"
-    elif bn >= 0.40:
+    elif bn >= 0.38:
         return "Defensive / Bond Heavy"
-    elif bn >= 0.25 and eq >= 0.35 and eq <= 0.62:
+    elif bn >= 0.22 and eq >= 0.35 and eq <= 0.62:
         return "Balanced"
     elif cash >= 0.15:
         return "Capital Preservation"
+    elif eq >= 0.45:
+        return "Growth Tilt"
     else:
         return "Diversified"
 
@@ -753,12 +755,11 @@ def find_alternative_portfolios(names, target_r, n_alternatives=6, sharpe_tol=0.
             )(np.ones(n) * 0.02),
         },
         {
-            # Moonshot: maximise return directly (not Sharpe), satellite Alt mandatory
-            # This is the highest-return feasible portfolio — accepts much higher vol
-            # Hard floor on Alt at cap limit, equity at cap limit
-            # No diversification penalty — let the optimizer concentrate if return demands it
+            # Moonshot: maximise SHRUNK return directly — accepts vol, concentrates
+            # Alt floor at 15%, Equity floor at 55% — forces concentration
+            # Objective has no risk or diversification penalty whatsoever
             "name": "moonshot",
-            "objective": lambda w: -(w @ rets),  # pure return maximisation
+            "objective": lambda w: -(w @ rets + 0.5 * (w @ raw_rets)),  # blend shrunk+raw for concentration
             "floors": {
                 "Alt":    min(0.15, ASSUMPTIONS["category_caps"].get("Alt", 0.20)),
                 "Equity": min(0.55, ASSUMPTIONS["category_caps"].get("Equity", 0.70)),
@@ -771,13 +772,13 @@ def find_alternative_portfolios(names, target_r, n_alternatives=6, sharpe_tol=0.
             )(np.ones(n) * 0.01),
         },
         {
-            # Real Asset / Inflation hedge: meaningful gold, REIT, commodities
-            # Useful if you believe inflation stays elevated or want hard asset exposure
+            # Inflation Hedge: high Real floor (28%+), modest equity
+            # Clearly distinct from real_assets_sharpe (18% Real) by hard floor
             "name": "inflation_hedge",
             "objective": lambda w: -((w @ rets - rf) / (np.sqrt(w.T @ cov @ w + 1e-10))) + 0.10 * np.sum(w**2),
             "floors": {
-                "Real":   min(0.25, ASSUMPTIONS["category_caps"].get("Real", 0.40)),
-                "Equity": min(0.30, ASSUMPTIONS["category_caps"].get("Equity", 0.70)),
+                "Real":   min(0.28, ASSUMPTIONS["category_caps"].get("Real", 0.40)),
+                "Equity": min(0.25, ASSUMPTIONS["category_caps"].get("Equity", 0.70)),
             },
             "seed": (lambda s: (
                 s.__setitem__(slice(None), 0.02),
@@ -859,17 +860,30 @@ def find_alternative_portfolios(names, target_r, n_alternatives=6, sharpe_tol=0.
     best_sharpe = max(c["sharpe"] for c in candidates)
     filtered    = [c for c in candidates if c["sharpe"] >= best_sharpe - sharpe_tol]
 
+    # Always keep moonshot and ultra_spicy if they exist — they're intentionally
+    # different even if L1 distance happens to be small
+    priority_philos = {"moonshot", "ultra_spicy", "alt_satellite"}
+    priority = [c for c in filtered if c.get("philosophy") in priority_philos]
+    rest     = [c for c in filtered if c.get("philosophy") not in priority_philos]
+
     kept = []
-    for c in sorted(filtered, key=lambda x: -x["sharpe"]):
-        if not kept:
-            kept.append(c); continue
-        min_dist = min(np.sum(np.abs(c["weights"] - k["weights"])) for k in kept)
-        if min_dist > 0.10:  # slightly tighter to allow more variety
-            kept.append(c)
+    # First pass: add priority philosophies regardless of distance
+    for c in sorted(priority, key=lambda x: -x["sharpe"]):
+        kept.append(c)
         if len(kept) >= n_alternatives:
             break
 
-    return kept
+    # Second pass: fill remaining slots with dedup logic
+    for c in sorted(rest, key=lambda x: -x["sharpe"]):
+        if len(kept) >= n_alternatives:
+            break
+        if not kept:
+            kept.append(c); continue
+        min_dist = min(np.sum(np.abs(c["weights"] - k["weights"])) for k in kept)
+        if min_dist > 0.10:
+            kept.append(c)
+
+    return sorted(kept, key=lambda x: -x["sharpe"])
 
 
 # ============================================================
