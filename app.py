@@ -2235,9 +2235,11 @@ Comparing against: <b>{active_label}</b> portfolio.
                             "Name": sf_name, "ISIN": sf_isin,
                             "Asset Class": sf_ac, "Value (EUR)": sf_val
                         })
-                    st.session_state["etf_add_count"] = st.session_state.get("etf_add_count", 0) + 1
                     action = "Updated" if merged else "Added"
-                    st.session_state["etf_last_toast"] = f"✅ {action}: {sf_name} (€{sf_val:,.0f})"
+                    st.session_state["etf_last_toast"] = f"✅ {action}: {sf_name} (€{sf_val:,.0f}) — see Your Holdings below."
+                    # Clear result so form disappears cleanly — search again to add more
+                    st.session_state["etf_last_result"] = None
+                    st.rerun()
                 elif sf_ac in ["— select asset class —", ""]:
                     st.warning("Please select an asset class before adding.")
                 else:
@@ -2265,7 +2267,8 @@ Comparing against: <b>{active_label}</b> portfolio.
                             "Asset Class": qa_ac, "Value (EUR)": qa_val
                         })
                     action = "Updated" if merged else "Added"
-                    st.session_state["etf_last_toast"] = f"✅ {action}: {qa_name} (€{qa_val:,.0f})"
+                    st.session_state["etf_last_toast"] = f"✅ {action}: {qa_name} (€{qa_val:,.0f}) — see Your Holdings below."
+                    st.rerun()
                 else:
                     st.warning("Enter a value greater than 0.")
 
