@@ -1911,3 +1911,504 @@ Comparing against: <b>{active_label}</b> portfolio.
         # Auto-rebalance: always recompute when holdings present
         # st.rerun() after every add ensures this tab always sees fresh data
         auto_rebalance = has_holdings
+
+        # ── Build current_vals from source ────────────────────
+        if has_holdings and source_mode and "My ETF" in source_mode:
+            current_vals = {}
+            for _, row in active_plan.iterrows():
+                ac = row["Asset"]
+                current_vals[ac] = float(h_agg.get(ac, 0.0))
+            for ac in h_agg.index:
+                if ac not in current_vals:
+                    current_vals[ac] = float(h_agg.get(ac, 0.0))
+
+            st.markdown("**Holdings mapped to model asset classes:**")
+            mapped_df = pd.DataFrame([
+                {"Asset Class": ac,
+                 "Value from holdings": current_vals.get(ac, 0.0),
+                 "Source ETFs": ", ".join(
+                     h["Name"] for h in holdings if h.get("Asset Class") == ac
+                 ) or "—"}
+                for ac in active_plan["Asset"].values
+            ])
+            unmapped = [h["Name"] for h in holdings
+                        if h.get("Asset Class") not in active_plan["Asset"].values]
+            st.dataframe(
+                mapped_df.style.format({"Value from holdings": "€{:,.0f}"}),
+                use_container_width=True, hide_index=True
+            )
+            if unmapped:
+                st.warning(
+                    f"Holdings not in active model (excluded): **{', '.join(unmapped)}**. "
+                    f"Change their asset class or update the active portfolio."
+                )
+            do_rebalance = st.button("Calculate Rebalance", key="reb_auto_btn")
+
+        else:
+            with st.form("rebalance_form"):
+                current_vals = {}
+                cols_reb = st.columns(2)
+                for i, row in enumerate(active_plan.itertuples()):
+                    with cols_reb[i % 2]:
+                        current_vals[row.Asset] = st.number_input(
+                            f"{row.Asset} (€)",
+                            value=float(row._4),
+                            min_value=0.0,
+                            key=f"rebal_{row.Asset}"
+                        )
+                do_rebalance = st.form_submit_button("Calculate Rebalance")
+
+        # ── Run rebalance logic ───────────────────────────────────
+        if "do_rebalance" not in locals():
+            do_rebalance = False
+        if do_rebalance or auto_rebalance:
+            reb_df = rebalance_triggers(
+                active_plan["Weight"].values,
+                active_plan["Asset"].values,
+                current_vals
+            )
+            total_curr = sum(current_vals.values())
+
+            st.divider()
+            col_r1, col_r2 = st.columns([3, 2])
+            with col_r1:
+                st.caption(
+                    f"Total current: **€{total_curr:,.0f}** | "
+                    f"Target: **{active_label}** | "
+                    f"Drift threshold: {int(ASSUMPTIONS['rebalance_drift_threshold']*100)}%"
+                )
+                reb_flagged = reb_df[reb_df["⚠️ Rebalance"] == "YES"]
+                if len(reb_flagged) == 0:
+                    st.success("✅ Portfolio is within drift thresholds — no rebalance needed.")
+                else:
+                    st.warning(f"⚠️ {len(reb_flagged)} asset(s) need rebalancing.")
+
+                st.dataframe(
+                    reb_df.style.format({
+                        "Target %":     "{:.1%}",
+                        "Current %":    "{:.1%}",
+                        "Drift":        "{:+.1%}",
+                        "Buy / Sell €": "€{:+,.0f}",
+                    }).applymap(
+                        lambda v: "background-color:#1a0a0a;color:#fca5a5" if v == "YES" else "",
+                        subset=["⚠️ Rebalance"]
+                    ),
+                    use_container_width=True, hide_index=True,
+                )
+                st.caption("Positive Buy/Sell = buy more. Negative = trim.")
+
+            with col_r2:
+                reb_plot = reb_df[reb_df["Buy / Sell €"].abs() > 10].copy()
+                if not reb_plot.empty:
+                    fig_reb = go.Figure(go.Bar(
+                        x=reb_plot["Asset"],
+                        y=reb_plot["Buy / Sell €"],
+                        marker=dict(
+                            color=["#4ade80" if v > 0 else "#ef4444"
+                                   for v in reb_plot["Buy / Sell €"]],
+                            opacity=0.85,
+                        ),
+                        text=[f"€{v:+,.0f}" for v in reb_plot["Buy / Sell €"]],
+                        textposition="outside",
+                    ))
+                    fig_reb.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#94a3b8", size=11),
+                        yaxis=dict(tickprefix="€", gridcolor="#1e2130"),
+                        xaxis=dict(gridcolor="#1e2130"),
+                        height=320,
+                        margin=dict(t=20, b=20, l=10, r=10),
+                    )
+                    st.plotly_chart(fig_reb, use_container_width=True)
+
+            if monthly > 0:
+                st.divider()
+                st.markdown("**Allocate this month's savings:**")
+                monthly_alloc = []
+                for _, row in active_plan.iterrows():
+                    amt = row["Weight"] * monthly
+                    if amt > 1:
+                        drift_row = reb_df[reb_df["Asset"] == row["Asset"]]
+                        is_under = (not drift_row.empty and
+                                    drift_row["Buy / Sell €"].values[0] > 0)
+                        monthly_alloc.append({
+                            "Asset":       row["Asset"],
+                            "Base (€/mo)": amt,
+                            "Priority":    "⬆️ Underweight — add here first" if is_under else "—",
+                        })
+                alloc_df = pd.DataFrame(monthly_alloc)
+                st.dataframe(
+                    alloc_df.style.format({"Base (€/mo)": "€{:,.0f}"}),
+                    use_container_width=True, hide_index=True
+                )
+                st.caption(
+                    f"€{monthly:,.0f}/mo split by target weight. "
+                    f"Prioritise underweight assets to rebalance gradually without selling."
+                )
+
+    # ── TAB 5: ETF LOOKUP ─────────────────────────────────────────
+    with tab_etf:
+        st.subheader("ETF Lookup & Holdings Builder")
+        st.caption(
+            "Search by ISIN or name. We attempt to fetch key data from justETF. "
+            "If lookup fails, a direct link is provided so you can fill in details manually. "
+            "Holdings added here automatically populate the Rebalance tab."
+        )
+
+        if "etf_holdings" not in st.session_state:
+            st.session_state["etf_holdings"] = []
+        if "etf_just_added" not in st.session_state:
+            st.session_state["etf_just_added"] = None
+
+        if st.session_state.get("etf_last_toast"):
+            st.success(st.session_state.pop("etf_last_toast"))
+
+        col_srch1, col_srch2 = st.columns([3, 1])
+        with col_srch1:
+            etf_query = st.text_input(
+                "ISIN or ETF name",
+                placeholder="e.g. IE00B4L5Y983 or IWDA",
+                key="etf_search_input"
+            )
+        with col_srch2:
+            do_search = st.button("🔍 Look up", key="etf_search_btn")
+
+        if do_search and etf_query.strip():
+            query = etf_query.strip()
+            st.session_state["etf_last_result"] = None
+            isin_like = len(query) >= 10 and query[:2].isalpha() and query[2:].replace('-','').isalnum()
+
+            with st.spinner("Fetching from justETF..."):
+                import urllib.request, urllib.parse, re as _re
+                result = {"success": False, "name": None, "ter": None,
+                          "asset_class": None, "isin": query, "url": None}
+
+                if isin_like:
+                    search_url = f"https://www.justetf.com/en/etf-profile.html?isin={query}"
+                else:
+                    enc = urllib.parse.quote(query)
+                    search_url = f"https://www.justetf.com/en/search.html?search=ETF&query={enc}"
+                result["url"] = search_url
+
+                KNOWN_ISINS = {
+                    "IE00B4L5Y983": ("iShares Core MSCI World UCITS ETF (IWDA)", 0.20, "World Equity"),
+                    "IE00B3RBWM25": ("Vanguard FTSE All-World UCITS ETF (VWRL)", 0.22, "World Equity"),
+                    "IE00BK5BQT80": ("Vanguard FTSE All-World UCITS ETF Acc (VWCE)", 0.22, "World Equity"),
+                    "LU0274208692": ("Xtrackers MSCI World Swap UCITS ETF", 0.19, "World Equity"),
+                    "IE00B5BMR087": ("iShares Core S&P 500 UCITS ETF (CSPX)", 0.07, "US Equity"),
+                    "IE00B3XXRP09": ("Vanguard S&P 500 UCITS ETF (VUSA)", 0.07, "US Equity"),
+                    "IE00B4K48X80": ("iShares Core MSCI Europe UCITS ETF", 0.12, "Europe Equity"),
+                    "IE00B4L5YC18": ("iShares Core MSCI EM IMI UCITS ETF (EIMI)", 0.18, "Emerging Markets"),
+                    "IE00BKM4GZ66": ("iShares Core MSCI Emerging Markets UCITS ETF", 0.18, "Emerging Markets"),
+                    "IE00BF4RFH31": ("iShares MSCI World Small Cap UCITS ETF", 0.35, "Global Small Cap"),
+                    "IE00B3VVMM84": ("Vanguard FTSE All-World Small-Cap UCITS ETF", 0.38, "Global Small Cap"),
+                    "IE00B3F81R35": ("iShares Core Global Aggregate Bond UCITS ETF (AGGG)", 0.10, "Corp Bonds"),
+                    "IE00BDBRDM35": ("iShares Core Global Aggregate Bond EUR Hedged (AGGH)", 0.10, "Corp Bonds"),
+                    "IE00B4WXJJ64": ("iShares Euro Government Bond UCITS ETF", 0.15, "Euro Gov Bonds"),
+                    "IE00B3CNHF87": ("iShares Physical Gold ETC (IGLN)", 0.12, "Gold"),
+                    "IE00B4NCWG09": ("iShares Physical Silver ETC", 0.20, "Precious Metals"),
+                    "IE00B8GF1M35": ("iShares Developed Markets Property Yield UCITS ETF", 0.59, "Global REIT"),
+                    "IE00BGV5VN51": ("iShares MSCI Global Semiconductors UCITS ETF", 0.35, "Semiconductors"),
+                    "IE0005E9BX43": ("Global X Uranium UCITS ETF", 0.65, "Uranium / Nuclear"),
+                    "IE000CNSFAR2": ("VanEck Uranium and Nuclear Technologies UCITS ETF", 0.55, "Uranium / Nuclear"),
+                    "IE00BYXYX521": ("iShares Diversified Commodity Swap UCITS ETF", 0.19, "Broad Commodities"),
+                    "IE00B0M62X26": ("iShares Global Inflation Linked Govt Bond UCITS ETF", 0.25, "Global Inflation Bonds"),
+                }
+
+                isin_upper = query.upper().replace(" ", "")
+                if isin_upper in KNOWN_ISINS:
+                    name, ter, ac = KNOWN_ISINS[isin_upper]
+                    result.update({"success": True, "name": name, "ter": ter,
+                                   "asset_class": ac, "isin": isin_upper, "source": "known_db"})
+                else:
+                    try:
+                        req = urllib.request.Request(search_url, headers={
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                            "Accept-Language": "en-GB,en;q=0.9",
+                        })
+                        with urllib.request.urlopen(req, timeout=8) as resp:
+                            html = resp.read().decode("utf-8", errors="ignore")
+                        m = _re.search(r'<title>([^|<]{5,80})', html)
+                        if m:
+                            result["name"] = m.group(1).strip().rstrip(" -")
+                            result["success"] = True
+                        ter_block = _re.search(r'TER[^<]{0,200}?([0-9]{1,2}\.[0-9]{2})\s*%',
+                                               html, _re.IGNORECASE | _re.DOTALL)
+                        if ter_block:
+                            ter_val = float(ter_block.group(1))
+                            if ter_val < 5.0:
+                                result["ter"] = ter_val
+                        name_lower = (result.get("name") or "").lower()
+                        if any(x in name_lower for x in ["s&p 500", "sp500", "russell", "nasdaq"]):
+                            result["asset_class"] = "US Equity"
+                        elif any(x in name_lower for x in ["msci world", "ftse all-world", "prime global",
+                                                            "all world", "world ucits", "acwi"]):
+                            result["asset_class"] = "World Equity"
+                        elif any(x in name_lower for x in ["emerging market", "msci em"]):
+                            result["asset_class"] = "Emerging Markets"
+                        elif any(x in name_lower for x in ["europe", "stoxx", "eurostoxx"]):
+                            result["asset_class"] = "Europe Equity"
+                        elif any(x in name_lower for x in ["japan", "topix", "pacific"]):
+                            result["asset_class"] = "Japan / Pacific"
+                        elif any(x in name_lower for x in ["small cap", "smallcap"]):
+                            result["asset_class"] = "Global Small Cap"
+                        elif any(x in name_lower for x in ["reit", "real estate", "property"]):
+                            result["asset_class"] = "Global REIT"
+                        elif any(x in name_lower for x in ["gold"]):
+                            result["asset_class"] = "Gold"
+                        elif any(x in name_lower for x in ["silver", "platinum", "palladium", "metal"]):
+                            result["asset_class"] = "Precious Metals"
+                        elif any(x in name_lower for x in ["commodity", "commodities"]):
+                            result["asset_class"] = "Broad Commodities"
+                        elif any(x in name_lower for x in ["inflation", "tips", "linker"]):
+                            result["asset_class"] = "Global Inflation Bonds"
+                        elif any(x in name_lower for x in ["government bond", "govt bond", "treasury", "bund"]):
+                            result["asset_class"] = "Euro Gov Bonds"
+                        elif any(x in name_lower for x in ["corporate bond", "aggregate bond", "credit"]):
+                            result["asset_class"] = "Corp Bonds"
+                        elif any(x in name_lower for x in ["semiconductor", "chip"]):
+                            result["asset_class"] = "Semiconductors"
+                        elif any(x in name_lower for x in ["uranium", "nuclear"]):
+                            result["asset_class"] = "Uranium / Nuclear"
+                    except Exception as e:
+                        result["error"] = str(e)
+
+                st.session_state["etf_last_result"] = result
+
+            if result["success"]:
+                src_tag = " *(from database)*" if result.get("source") == "known_db" else " *(from justETF)*"
+                st.success(f"Found: **{result['name']}**{src_tag}")
+                c1, c2, c3 = st.columns(3)
+                with c1: st.metric("ISIN", result["isin"])
+                with c2: st.metric("TER", f"{result['ter']}%" if result["ter"] else "—")
+                with c3: st.metric("Suggested mapping", result["asset_class"] or "Unknown — select below")
+            else:
+                st.warning(
+                    f"Could not auto-fetch **{query}**. Fill in below or "
+                    f"[view on justETF]({result.get('url', '')})"
+                )
+
+        # ── Add from last search result ───────────────────────────
+        last_result = st.session_state.get("etf_last_result")
+        if last_result:
+            st.divider()
+            if last_result.get("success"):
+                st.markdown(f"**Add to holdings:** *{last_result.get('name', '')}*")
+            else:
+                st.markdown("**Add to holdings manually:**")
+
+            ac_opts_raw = list(ASSETS.keys())
+            ac_opts_with_blank = ["— select asset class —"] + ac_opts_raw
+            sug_ac  = last_result.get("asset_class") or ""
+            sug_idx = ac_opts_with_blank.index(sug_ac) if sug_ac in ac_opts_with_blank else 0
+
+            fc1, fc2, fc3, fc4 = st.columns([3, 2, 2, 2])
+            with fc1:
+                sf_name = st.text_input("Name / Ticker",
+                    value=last_result.get("name") or last_result.get("isin", ""),
+                    key="sr_f_name")
+            with fc2:
+                sf_isin = st.text_input("ISIN",
+                    value=last_result.get("isin", ""), key="sr_f_isin")
+            with fc3:
+                sf_ac = st.selectbox("Maps to asset class", ac_opts_with_blank,
+                    index=sug_idx, key="sr_f_ac")
+            with fc4:
+                _add_cnt = st.session_state.get("etf_add_count", 0)
+                sf_val = st.number_input("Value (EUR)", min_value=0.0, value=0.0,
+                    step=100.0, key=f"sr_f_val_{_add_cnt}")
+
+            if not last_result.get("success"):
+                st.caption(f"[View on justETF]({last_result.get('url', '')})")
+
+            if st.button("✅ Add to holdings", key="sr_add_btn"):
+                if sf_name and sf_val > 0 and sf_ac not in ["— select asset class —", ""]:
+                    merged = False
+                    for h in st.session_state["etf_holdings"]:
+                        if h["Name"].strip().lower() == sf_name.strip().lower() and                            h["Asset Class"] == sf_ac:
+                            h["Value (EUR)"] = float(h["Value (EUR)"]) + sf_val
+                            merged = True
+                            break
+                    if not merged:
+                        st.session_state["etf_holdings"].append({
+                            "Name": sf_name, "ISIN": sf_isin,
+                            "Asset Class": sf_ac, "Value (EUR)": sf_val
+                        })
+                    st.session_state["etf_add_count"] = st.session_state.get("etf_add_count", 0) + 1
+                    action = "Updated" if merged else "Added"
+                    st.session_state["etf_last_toast"] = f"✅ {action}: {sf_name} (€{sf_val:,.0f})"
+                elif sf_ac in ["— select asset class —", ""]:
+                    st.warning("Please select an asset class before adding.")
+                else:
+                    st.warning("Enter a value greater than 0.")
+
+        # Quick-add without searching
+        with st.expander("➕ Add ETF manually (without searching)", expanded=False):
+            qa1, qa2, qa3, qa4 = st.columns([3, 2, 2, 2])
+            with qa1: qa_name = st.text_input("Name / Ticker", key="qa_name", placeholder="e.g. VWCE")
+            with qa2: qa_isin = st.text_input("ISIN", key="qa_isin", placeholder="e.g. IE00BK5BQT80")
+            with qa3: qa_ac   = st.selectbox("Asset class", list(ASSETS.keys()), key="qa_ac")
+            with qa4: qa_val  = st.number_input("Value (EUR)", min_value=0.0, value=0.0,
+                                                 step=100.0, key="qa_val")
+            if st.button("Add", key="qa_add_btn") and qa_name:
+                if qa_val > 0:
+                    merged = False
+                    for h in st.session_state["etf_holdings"]:
+                        if h["Name"].strip().lower() == qa_name.strip().lower() and                            h["Asset Class"] == qa_ac:
+                            h["Value (EUR)"] = float(h["Value (EUR)"]) + qa_val
+                            merged = True
+                            break
+                    if not merged:
+                        st.session_state["etf_holdings"].append({
+                            "Name": qa_name, "ISIN": qa_isin,
+                            "Asset Class": qa_ac, "Value (EUR)": qa_val
+                        })
+                    action = "Updated" if merged else "Added"
+                    st.session_state["etf_last_toast"] = f"✅ {action}: {qa_name} (€{qa_val:,.0f})"
+                else:
+                    st.warning("Enter a value greater than 0.")
+
+        # ── Holdings — always visible ─────────────────────────────
+        st.divider()
+        st.markdown("### Your Holdings")
+        fresh_h = st.session_state.get("etf_holdings") or []
+        if fresh_h:
+            holdings_df = pd.DataFrame(fresh_h)
+            total_h = holdings_df["Value (EUR)"].sum()
+            st.caption(
+                f"**{len(fresh_h)} ETFs added** · Total: **EUR {total_h:,.0f}** · "
+                f"Go to the **Rebalance** tab to compare against your model target."
+            )
+            edited_holdings = st.data_editor(
+                holdings_df,
+                column_config={
+                    "Name":        st.column_config.TextColumn("ETF Name"),
+                    "ISIN":        st.column_config.TextColumn("ISIN"),
+                    "Asset Class": st.column_config.SelectboxColumn(
+                        "Asset Class", options=list(ASSETS.keys())
+                    ),
+                    "Value (EUR)": st.column_config.NumberColumn(
+                        "Value (EUR)", min_value=0, format="EUR %.0f"
+                    ),
+                },
+                use_container_width=True, hide_index=True,
+                key="holdings_editor", num_rows="dynamic",
+            )
+            if edited_holdings is not None:
+                st.session_state["etf_holdings"] = edited_holdings.to_dict("records")
+
+            agg     = holdings_df.groupby("Asset Class")["Value (EUR)"].sum()
+            agg_pct = agg / total_h if total_h > 0 else agg
+            target_w_map = dict(zip(assets, w))
+            drift_rows = []
+            for ac in sorted(set(list(agg_pct.index) + [
+                a for a, wi in target_w_map.items() if wi > 0.005
+            ])):
+                actual    = float(agg_pct.get(ac, 0.0))
+                target_wt = float(target_w_map.get(ac, 0.0)) if target_w_map.get(ac, 0.0) > 0.005 else 0.0
+                drift_rows.append({"Asset Class": ac, "You hold": actual,
+                                   "Model target": target_wt, "Drift": actual - target_wt})
+            drift_df = pd.DataFrame(drift_rows)
+            drift_df = drift_df[drift_df[["You hold","Model target"]].max(axis=1) > 0.001]
+            st.markdown("**Quick drift vs model target:**")
+            st.dataframe(
+                drift_df.style
+                    .format({"You hold": "{:.1%}", "Model target": "{:.1%}", "Drift": "{:+.1%}"})
+                    .bar(subset=["Drift"], align="zero", color=["#7f1d1d","#14532d"]),
+                use_container_width=True, hide_index=True
+            )
+            st.caption("Drift = actual minus target. Green = underweight. Red = overweight.")
+        else:
+            st.info(
+                "No holdings yet — search for an ETF above and click **Add to holdings**, "
+                "or use the manual expander. Your list will appear here."
+            )
+
+    # ── TAB 6: ENGINE ─────────────────────────────────────────
+    with tab_engine:
+        st.header("Engine Room — Advanced Overrides")
+        st.caption("Changes here take effect on the next 'Build Plan' run.")
+
+        col_e1, col_e2 = st.columns(2)
+        with col_e1:
+            st.subheader("Asset Parameters")
+            st.session_state["asset_settings"] = st.data_editor(
+                st.session_state["asset_settings"],
+                column_config={
+                    "Asset":   st.column_config.TextColumn("Asset", disabled=True),
+                    "return":  st.column_config.NumberColumn("Return (nominal)", format="%.3f"),
+                    "vol":     st.column_config.NumberColumn("Volatility", format="%.3f"),
+                    "cat":     st.column_config.TextColumn("Category", disabled=True),
+                },
+                use_container_width=True, hide_index=True, key="asset_editor"
+            )
+
+        with col_e2:
+            st.subheader("Category Caps (max allocation)")
+            cap_data = pd.DataFrame([
+                {"Category": k, "Max Weight": v}
+                for k, v in ASSUMPTIONS["category_caps"].items()
+            ])
+            edited_caps = st.data_editor(
+                cap_data,
+                column_config={
+                    "Category":   st.column_config.TextColumn("Category", disabled=True),
+                    "Max Weight": st.column_config.NumberColumn("Max Weight", format="%.2f",
+                                                                 min_value=0.0, max_value=1.0),
+                },
+                hide_index=True, use_container_width=True, key="cap_editor"
+            )
+            for _, row in edited_caps.iterrows():
+                ASSUMPTIONS["category_caps"][row["Category"]] = row["Max Weight"]
+
+        st.divider()
+        st.subheader("Correlation Matrix (Editable)")
+        st.markdown("""
+<div class="warning-inline">
+Editing correlations here is preserved until the asset selection changes.
+If you add/remove assets, the matrix will be reset.
+</div>
+""", unsafe_allow_html=True)
+        edited_corr = st.data_editor(
+            st.session_state["corr_override"],
+            use_container_width=True, key="corr_editor"
+        )
+        edited_corr = edited_corr.clip(-1.0, 1.0)
+        edited_corr = (edited_corr + edited_corr.T) / 2
+        np.fill_diagonal(edited_corr.values, 1.0)
+        extreme = ((edited_corr.abs() > 0.95) & (edited_corr != 1.0)).any().any()
+        if extreme:
+            st.warning("⚠️ Some correlations exceed ±0.95 — may destabilise the optimiser.")
+        st.session_state["corr_override"] = edited_corr
+
+        st.divider()
+        st.subheader("Asset Utility Analysis")
+        if "results" in st.session_state:
+            res_w  = st.session_state["results"]["w"]
+            res_as = st.session_state["results"]["assets"]
+            dead   = [(a, wi) for a, wi in zip(res_as, res_w) if wi < 0.005]
+            if dead:
+                dead_df = pd.DataFrame([{
+                    "Asset": a, "Category": ASSETS[a]["cat"],
+                    "Base Return": f"{ASSETS[a]['return']*100:.1f}%",
+                    "Volatility":  f"{ASSETS[a]['vol']*100:.1f}%",
+                    "Note": ASSETS[a].get("note", ""),
+                    "Status": "Not selected by optimizer"
+                } for a, _ in dead])
+                st.dataframe(dead_df, use_container_width=True, hide_index=True)
+                st.caption(
+                    "These assets were available but not chosen. "
+                    "Try raising their return in the table above or excluding competing assets."
+                )
+            else:
+                st.success("All selected assets appear in the optimal portfolio.")
+        else:
+            st.info("Run Build Plan first to see asset utility analysis.")
+
+        st.divider()
+        st.subheader("Optimizer & Simulation Config")
+        st.json(ASSUMPTIONS["optimizer"] | ASSUMPTIONS["simulation"] |
+                {"safe_withdrawal_rate": ASSUMPTIONS["safe_withdrawal_rate"],
+                 "rebalance_drift_threshold": ASSUMPTIONS["rebalance_drift_threshold"],
+                 "return_scenarios": ASSUMPTIONS["return_scenarios"]})
