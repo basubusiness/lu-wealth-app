@@ -1463,28 +1463,28 @@ if "results" in st.session_state:
         "📐 Plan", "📈 Projection", "🛡️ Risk", "⚖️ Rebalance", "🔍 ETF Lookup", "⚙️ Engine"
     ])
 
+    # Build plan_df BEFORE tabs so it's available in all tabs (Rebalance needs it)
+    _df_lu  = st.session_state["asset_settings"].set_index("Asset")
+    _vols_a = np.array([_df_lu.loc[a, "vol"] for a in assets])
+    _corr_idx = st.session_state["corr_override"].index.tolist()
+    if not all(a in _corr_idx for a in assets):
+        st.session_state["corr_override"] = build_corr(assets)
+    _corr_a = st.session_state["corr_override"].loc[assets, assets].values
+    _cov_a  = np.diag(_vols_a) @ _corr_a @ np.diag(_vols_a)
+    _rc     = (w * (_cov_a @ w)) / (port_v ** 2 + 1e-10)
+
+    plan_df = pd.DataFrame({
+        "Asset":        assets,
+        "Weight":       w,
+        "Category":     [ASSETS[a]["cat"] for a in assets],
+        "Risk Contrib": _rc,
+        "Invest Now":   w * initial,
+        "Monthly":      w * monthly,
+    })
+    plan_df = plan_df[plan_df["Weight"] > 0.005].sort_values("Weight", ascending=False)
+
     # ── TAB 1: PLAN ──────────────────────────────────────────
     with tab_plan:
-        # Compute risk contribution for active portfolio
-        _df_lu  = st.session_state["asset_settings"].set_index("Asset")
-        _vols_a = np.array([_df_lu.loc[a, "vol"] for a in assets])
-        # Guard: rebuild corr if active portfolio assets not all present
-        _corr_idx = st.session_state["corr_override"].index.tolist()
-        if not all(a in _corr_idx for a in assets):
-            st.session_state["corr_override"] = build_corr(assets)
-        _corr_a = st.session_state["corr_override"].loc[assets, assets].values
-        _cov_a  = np.diag(_vols_a) @ _corr_a @ np.diag(_vols_a)
-        _rc     = (w * (_cov_a @ w)) / (port_v ** 2 + 1e-10)
-
-        plan_df = pd.DataFrame({
-            "Asset":        assets,
-            "Weight":       w,
-            "Category":     [ASSETS[a]["cat"] for a in assets],
-            "Risk Contrib": _rc,
-            "Invest Now":   w * initial,
-            "Monthly":      w * monthly,
-        })
-        plan_df = plan_df[plan_df["Weight"] > 0.005].sort_values("Weight", ascending=False)
 
         st.dataframe(
             plan_df.style.format({
@@ -2200,7 +2200,11 @@ Comparing against: <b>{active_label}</b> portfolio.
                             # Priority: match on name first
                             if any(x in name_lower for x in ["s&p 500", "sp500", "russell", "nasdaq", "us equit"]):
                                 result["asset_class"] = "US Equity"
-                            elif any(x in name_lower for x in ["msci world", "ftse all-world", "ftse all world", "acwi", "global equit"]):
+                            elif any(x in name_lower for x in [
+                                "msci world", "ftse all-world", "ftse all world", "acwi",
+                                "global equit", "prime global", "world ucits", "all world",
+                                "global stocks", "world stocks", "world index"
+                            ]):
                                 result["asset_class"] = "World Equity"
                             elif any(x in name_lower for x in ["emerging market", "msci em", "ftse em"]):
                                 result["asset_class"] = "Emerging Markets"
