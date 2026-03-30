@@ -1908,6 +1908,18 @@ Comparing against: <b>{active_label}</b> portfolio.
 </div>
 """, unsafe_allow_html=True)
 
+        # Auto-rebalance: track holdings version so we recompute when holdings change
+        holdings_sig = str(sorted([
+            (h.get("Asset Class",""), h.get("Value (EUR)", 0))
+            for h in holdings
+        ]))
+        last_sig = st.session_state.get("_reb_last_sig", "")
+        auto_rebalance = (has_holdings and holdings_sig != last_sig)
+        if not has_holdings:
+            auto_rebalance = False
+        if auto_rebalance:
+            st.session_state["_reb_last_sig"] = holdings_sig
+
         # ── Build current_vals from source ────────────────────
         if has_holdings and source_mode and "My ETF" in source_mode:
             # Auto-populate from holdings — map asset class to current value
@@ -1959,7 +1971,7 @@ Comparing against: <b>{active_label}</b> portfolio.
         # ── Run rebalance logic ───────────────────────────────────
         if "do_rebalance" not in locals():
             do_rebalance = False
-        if do_rebalance:
+        if do_rebalance or auto_rebalance:
             reb_df = rebalance_triggers(
                 active_plan["Weight"].values,
                 active_plan["Asset"].values,
@@ -2315,8 +2327,10 @@ Comparing against: <b>{active_label}</b> portfolio.
             with fc3:
                 sf_ac = st.selectbox("Maps to asset class", ac_opts_with_blank, index=sug_idx, key="sr_f_ac")
             with fc4:
+                # Use counter in key so value resets to 0 after each add
+                _add_cnt = st.session_state.get("etf_add_count", 0)
                 sf_val = st.number_input("Value (EUR)", min_value=0.0, value=0.0,
-                                          step=100.0, key="sr_f_val")
+                                          step=100.0, key=f"sr_f_val_{_add_cnt}")
 
             if not last_result.get("success"):
                 st.caption(f"[View on justETF]({last_result.get('url', '')})")
@@ -2335,8 +2349,11 @@ Comparing against: <b>{active_label}</b> portfolio.
                             "Name": sf_name, "ISIN": sf_isin,
                             "Asset Class": sf_ac, "Value (EUR)": sf_val
                         })
-                    st.session_state["etf_last_result"] = None  # clear after add
-                    st.success(f"✅ **{sf_name}** added — see Your Holdings below.")
+                    # Keep result visible so user can add another amount
+                    # Increment a counter to reset only the value field
+                    st.session_state["etf_add_count"] = st.session_state.get("etf_add_count", 0) + 1
+                    action = "Updated" if merged else "Added"
+                    st.success(f"✅ **{action}: {sf_name}** (€{sf_val:,.0f}) — see Your Holdings below.")
                 elif sf_ac in ["— select asset class —", ""]:
                     st.warning("Please select an asset class before adding.")
                 else:
