@@ -2251,6 +2251,9 @@ Comparing against: <b>{active_label}</b> portfolio.
                     except Exception as e:
                         result["error"] = str(e)
 
+            # Persist result so add form survives beyond the do_search rerun
+            st.session_state["etf_last_result"] = result
+
             # Show result
             if result["success"]:
                 src_tag = " *(from database)*" if result.get("source") == "known_db" else " *(from justETF)*"
@@ -2283,44 +2286,53 @@ Comparing against: <b>{active_label}</b> portfolio.
                     f"[view on justETF]({result['url']}) to look up the details."
                 )
 
-            # Add form — plain widgets (no st.form) so button works without form submission quirks
-            st.markdown("**Add to holdings:**")
-            # Persist lookup result in session state so values survive widget interactions
-            if "etf_stage" not in st.session_state or st.session_state.get("etf_stage_query") != query:
-                st.session_state["etf_stage"] = {
-                    "name": result.get("name") or query,
-                    "isin": result.get("isin", ""),
-                    "asset_class": result.get("asset_class") or "",
-                }
-                st.session_state["etf_stage_query"] = query
+        # ── Add from last search result (always visible after search) ──
+        last_result = st.session_state.get("etf_last_result")
+        if last_result:
+            st.divider()
+            if last_result.get("success"):
+                st.markdown(f"**Add to holdings:** *{last_result.get('name', '')}*")
+            else:
+                st.markdown("**Add to holdings manually:**")
 
-            ac_opts = list(ASSETS.keys())
-            default_ac  = st.session_state["etf_stage"]["asset_class"]
-            default_idx = ac_opts.index(default_ac) if default_ac in ac_opts else 0
+            ac_opts  = list(ASSETS.keys())
+            sug_ac   = last_result.get("asset_class") or ""
+            sug_idx  = ac_opts.index(sug_ac) if sug_ac in ac_opts else 0
+            def_name = last_result.get("name") or last_result.get("isin", "")
+            def_isin = last_result.get("isin", "")
 
             fc1, fc2, fc3, fc4 = st.columns([3, 2, 2, 2])
             with fc1:
-                f_name = st.text_input("Name / Ticker",
-                    value=st.session_state["etf_stage"]["name"], key="etf_f_name")
+                sf_name = st.text_input("Name / Ticker", value=def_name, key="sr_f_name")
             with fc2:
-                f_isin = st.text_input("ISIN",
-                    value=st.session_state["etf_stage"]["isin"], key="etf_f_isin")
+                sf_isin = st.text_input("ISIN", value=def_isin, key="sr_f_isin")
             with fc3:
-                f_ac = st.selectbox("Maps to asset class", ac_opts,
-                    index=default_idx, key="etf_f_ac")
+                sf_ac = st.selectbox("Maps to asset class", ac_opts, index=sug_idx, key="sr_f_ac")
             with fc4:
-                f_val = st.number_input("Current value (EUR)",
-                    min_value=0.0, value=0.0, step=100.0, key="etf_f_val")
+                sf_val = st.number_input("Value (EUR)", min_value=0.0, value=0.0,
+                                          step=100.0, key="sr_f_val")
+
+            if not last_result.get("success"):
+                st.caption(f"[View on justETF]({last_result.get('url', '')})")
 
             if st.button("✅ Add to holdings", key="sr_add_btn"):
-                if f_name:
-                    st.session_state["etf_holdings"].append({
-                        "Name": f_name, "ISIN": f_isin,
-                        "Asset Class": f_ac, "Value (EUR)": f_val
-                    })
-                    st.session_state.pop("etf_stage", None)
-                    st.session_state.pop("etf_stage_query", None)
-                    st.success(f"✅ **{f_name}** added — scroll down to Your Holdings.")
+                if sf_name and sf_val > 0:
+                    # Aggregate: if same Name+AssetClass already exists, add to value
+                    merged = False
+                    for h in st.session_state["etf_holdings"]:
+                        if h["Name"].strip().lower() == sf_name.strip().lower() and                            h["Asset Class"] == sf_ac:
+                            h["Value (EUR)"] = float(h["Value (EUR)"]) + sf_val
+                            merged = True
+                            break
+                    if not merged:
+                        st.session_state["etf_holdings"].append({
+                            "Name": sf_name, "ISIN": sf_isin,
+                            "Asset Class": sf_ac, "Value (EUR)": sf_val
+                        })
+                    st.session_state["etf_last_result"] = None  # clear after add
+                    st.success(f"✅ **{sf_name}** added — see Your Holdings below.")
+                else:
+                    st.warning("Enter a value greater than 0 before adding.")
 
         # Quick-add without searching — for when you know your ETF
         with st.expander("➕ Add ETF manually (without searching)", expanded=False):
@@ -2335,11 +2347,22 @@ Comparing against: <b>{active_label}</b> portfolio.
                 qa_val = st.number_input("Value (EUR)", min_value=0.0, value=0.0,
                                           step=100.0, key="qa_val")
             if st.button("Add", key="qa_add_btn") and qa_name:
-                st.session_state["etf_holdings"].append({
-                    "Name": qa_name, "ISIN": qa_isin,
-                    "Asset Class": qa_ac, "Value (EUR)": qa_val
-                })
-                st.success(f"✅ **{qa_name}** added — scroll down to Your Holdings, then go to Rebalance tab.")
+                if qa_val > 0:
+                    merged = False
+                    for h in st.session_state["etf_holdings"]:
+                        if h["Name"].strip().lower() == qa_name.strip().lower() and                            h["Asset Class"] == qa_ac:
+                            h["Value (EUR)"] = float(h["Value (EUR)"]) + qa_val
+                            merged = True
+                            break
+                    if not merged:
+                        st.session_state["etf_holdings"].append({
+                            "Name": qa_name, "ISIN": qa_isin,
+                            "Asset Class": qa_ac, "Value (EUR)": qa_val
+                        })
+                    action = "Updated" if merged else "Added"
+                    st.success(f"✅ **{action} {qa_name}** — scroll down to Your Holdings, then go to Rebalance tab.")
+                else:
+                    st.warning("Enter a value greater than 0.")
 
         # ── Holdings — always visible below search ───────────────
         st.divider()
