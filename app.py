@@ -1872,10 +1872,10 @@ cross-asset correlations floored at {ASSUMPTIONS['crisis_regime']['corr_floor']}
         st.subheader("Portfolio Alignment & Drift Monitor")
 
         # ── Source selection ──────────────────────────────────
-        holdings = st.session_state.get("etf_holdings", [])
-        active_plan = plan_df[plan_df["Weight"] > 0.005]
+        holdings     = st.session_state.get("etf_holdings") or []
+        active_plan  = plan_df[plan_df["Weight"] > 0.005]
+        has_holdings = len([h for h in holdings if float(h.get("Value (EUR)", 0)) > 0]) > 0
 
-        has_holdings = len(holdings) > 0
         if has_holdings:
             # Aggregate holdings by asset class
             h_df = pd.DataFrame(holdings)
@@ -1909,7 +1909,7 @@ Comparing against: <b>{active_label}</b> portfolio.
 """, unsafe_allow_html=True)
 
         # ── Build current_vals from source ────────────────────
-        if has_holdings and "My ETF" in source_mode:
+        if has_holdings and source_mode and "My ETF" in source_mode:
             # Auto-populate from holdings — map asset class to current value
             current_vals = {}
             for _, row in active_plan.iterrows():
@@ -2312,7 +2312,7 @@ Comparing against: <b>{active_label}</b> portfolio.
                 f_val = st.number_input("Current value (EUR)",
                     min_value=0.0, value=0.0, step=100.0, key="etf_f_val")
 
-            if st.button("✅ Add to holdings", key="etf_add_btn"):
+            if st.button("✅ Add to holdings", key="sr_add_btn"):
                 if f_name:
                     st.session_state["etf_holdings"].append({
                         "Name": f_name, "ISIN": f_isin,
@@ -2320,7 +2320,7 @@ Comparing against: <b>{active_label}</b> portfolio.
                     })
                     st.session_state.pop("etf_stage", None)
                     st.session_state.pop("etf_stage_query", None)
-                    st.success(f"✅ Added **{f_name}** — see holdings below.")
+                    st.success(f"✅ **{f_name}** added — scroll down to Your Holdings.")
 
         # Quick-add without searching — for when you know your ETF
         with st.expander("➕ Add ETF manually (without searching)", expanded=False):
@@ -2339,7 +2339,7 @@ Comparing against: <b>{active_label}</b> portfolio.
                     "Name": qa_name, "ISIN": qa_isin,
                     "Asset Class": qa_ac, "Value (EUR)": qa_val
                 })
-                st.success(f"Added {qa_name}")
+                st.success(f"✅ **{qa_name}** added — scroll down to Your Holdings, then go to Rebalance tab.")
 
         # ── Holdings — always visible below search ───────────────
         st.divider()
