@@ -1956,9 +1956,10 @@ Comparing against: <b>{active_label}</b> portfolio.
                         )
                 do_rebalance = st.form_submit_button("Calculate Rebalance")
 
-        # ── Run rebalance logic ───────────────────────────────
-        if (has_holdings and "My ETF" in source_mode and do_rebalance) or            (source_mode == "✏️ Manual entry" and do_rebalance):
-
+        # ── Run rebalance logic ───────────────────────────────────
+        if "do_rebalance" not in locals():
+            do_rebalance = False
+        if do_rebalance:
             reb_df = rebalance_triggers(
                 active_plan["Weight"].values,
                 active_plan["Asset"].values,
@@ -2295,9 +2296,10 @@ Comparing against: <b>{active_label}</b> portfolio.
             else:
                 st.markdown("**Add to holdings manually:**")
 
-            ac_opts  = list(ASSETS.keys())
-            sug_ac   = last_result.get("asset_class") or ""
-            sug_idx  = ac_opts.index(sug_ac) if sug_ac in ac_opts else 0
+            ac_opts_raw = list(ASSETS.keys())
+            ac_opts_with_blank = ["— select asset class —"] + ac_opts_raw
+            sug_ac  = last_result.get("asset_class") or ""
+            sug_idx = ac_opts_with_blank.index(sug_ac) if sug_ac in ac_opts_with_blank else 0
             def_name = last_result.get("name") or last_result.get("isin", "")
             def_isin = last_result.get("isin", "")
 
@@ -2307,7 +2309,7 @@ Comparing against: <b>{active_label}</b> portfolio.
             with fc2:
                 sf_isin = st.text_input("ISIN", value=def_isin, key="sr_f_isin")
             with fc3:
-                sf_ac = st.selectbox("Maps to asset class", ac_opts, index=sug_idx, key="sr_f_ac")
+                sf_ac = st.selectbox("Maps to asset class", ac_opts_with_blank, index=sug_idx, key="sr_f_ac")
             with fc4:
                 sf_val = st.number_input("Value (EUR)", min_value=0.0, value=0.0,
                                           step=100.0, key="sr_f_val")
@@ -2316,7 +2318,7 @@ Comparing against: <b>{active_label}</b> portfolio.
                 st.caption(f"[View on justETF]({last_result.get('url', '')})")
 
             if st.button("✅ Add to holdings", key="sr_add_btn"):
-                if sf_name and sf_val > 0:
+                if sf_name and sf_val > 0 and sf_ac not in ["— select asset class —", ""]:
                     # Aggregate: if same Name+AssetClass already exists, add to value
                     merged = False
                     for h in st.session_state["etf_holdings"]:
@@ -2331,6 +2333,8 @@ Comparing against: <b>{active_label}</b> portfolio.
                         })
                     st.session_state["etf_last_result"] = None  # clear after add
                     st.success(f"✅ **{sf_name}** added — see Your Holdings below.")
+                elif sf_ac in ["— select asset class —", ""]:
+                    st.warning("Please select an asset class before adding.")
                 else:
                     st.warning("Enter a value greater than 0 before adding.")
 
